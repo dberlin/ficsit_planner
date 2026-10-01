@@ -1,4 +1,3 @@
-import dagre from '@dagrejs/dagre';
 import { Position, type Edge, type Node } from '@xyflow/react';
 import { groupClocks } from './clocks';
 import { data, transportFor, type Transport } from './data';
@@ -157,11 +156,6 @@ export const runExtra = (u: RecipeUse) => Math.max(0, groupClocks(u.clocks).leng
 
 type Box = { width: number; height: number };
 
-const scaled = (size: Box, k: number) => ({
-  width: Math.round(size.width * k),
-  height: Math.round(size.height * k),
-});
-
 /**
  * A card's box on the floor: card size scales all of it, and text size makes room for the bigger
  * lettering (mostly height, since lines wrap). The CSS sizes the cards with the same formula.
@@ -172,8 +166,8 @@ export const cardBox = (size: Box, k: number, text: number): Box => ({
 });
 
 /**
- * Space kept for each belt label, so labels never sit on a machine. Dagre gives labels a rank of
- * their own, so ranksep is the gap on both sides of that label rank together.
+ * Space kept for each belt label, so labels never sit on a machine. ELK gives centred labels a layer of
+ * their own, so ranksep is the gap on both sides of that label layer together.
  */
 export const LABEL = { width: 176, height: 50 };
 export const SPACING = {
@@ -181,17 +175,11 @@ export const SPACING = {
   TB: { nodesep: 30, ranksep: 70 },
 };
 
-export interface GraphOptions {
-  /** Fixed direction; without it both are tried against the screen and the better fit wins. */
-  dir?: Direction;
-  /** The floor the graph is shown on, for picking the direction. */
-  box?: { width: number; height: number };
+export interface BuildOptions {
   /** Card size from the settings; the stylesheet draws the cards at the same scale. */
   scale?: number;
   /** Belt label text size from the settings, for the room kept free for labels. */
   text?: number;
-  /** Room between machines, 1 = default. */
-  spacing?: number;
   /** Power grid: what it feeds, drawn after the grid node. */
   consumers?: Consumer[];
   /**
@@ -244,9 +232,10 @@ export function machineGroups(u: RecipeUse, capOf: (item: string) => number | un
  * Turns an LP solution into a factory graph. Each item's producers are matched to its
  * consumers greedily (largest first), which keeps the number of belts low compared
  * to splitting every producer proportionally across every consumer. With `opts.split`, lines are first split
- * into machine groups, so no belt or pipe between machines carries more than the chosen one can.
+ * into machine groups, so no belt or pipe between machines carries more than the chosen one can. Positions and
+ * ports come from `layoutGraph`.
  */
-export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions = {}): { nodes: Node[]; edges: Edge[]; dir: Direction } {
+export function buildGraph(result: SolveResult, tier: number, opts: BuildOptions = {}): { nodes: Node[]; edges: Edge[] } {
   const k = opts.scale ?? 1;
   const box = (size: Box) => cardBox(size, k, opts.text ?? 1);
   const nodes: Node[] = [];
@@ -339,9 +328,7 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
 
   if (result.grid) addGrid(result, plants, nodes, edges, opts.consumers ?? [], box);
 
-  const dir = layout(nodes, edges, opts);
-  spreadPorts(nodes, edges, dir);
-  return { nodes, edges, dir };
+  return { nodes, edges };
 }
 
 /**
@@ -395,94 +382,4 @@ function addGrid(
       data: { mw: c.mw } satisfies PowerEdgeData,
     });
   }
-}
-
-type Ranker = 'network-simplex' | 'tight-tree' | 'longest-path';
-const RANKERS: Ranker[] = ['network-simplex', 'tight-tree', 'longest-path'];
-
-interface Placement {
-  dir: Direction;
-  pos: Map<string, Point>;
-  routes: Map<string, { points: Point[]; label: Point }>;
-  width: number;
-  height: number;
-  crossings: number;
-}
-
-function place(nodes: Node[], edges: Edge[], dir: Direction, ranker: Ranker, opts: GraphOptions): Placement {
-  const g = new dagre.graphlib.Graph({ multigraph: true });
-  const gap = (opts.scale ?? 1) * (opts.spacing ?? 1);
-  const label = scaled(LABEL, opts.text ?? 1);
-  g.setGraph({ rankdir: dir, ranker, nodesep: SPACING[dir].nodesep * gap, ranksep: SPACING[dir].ranksep * gap, marginx: 30, marginy: 30 });
-  for (const n of nodes) g.setNode(n.id, { width: n.width, height: n.height });
-  for (const e of edges) g.setEdge(e.source, e.target, { ...label, labelpos: 'c' }, e.id);
-  dagre.layout(g);
-  const pos = new Map<string, Point>();
-  for (const n of nodes) {
-    const p = g.node(n.id);
-    pos.set(n.id, { x: p.x - (n.width ?? 0) / 2, y: p.y - (n.height ?? 0) / 2 });
-  }
-  const routes = new Map<string, { points: Point[]; label: Point }>();
-  for (const e of edges) {
-    const r = g.edge({ v: e.source, w: e.target, name: e.id });
-    // The first and last points sit on the machines' borders; the handles replace them.
-    routes.set(e.id, { points: r.points.slice(1, -1), label: { x: r.x, y: r.y } });
-  }
-  const { width = 0, height = 0 } = g.graph();
-  return { dir, pos, routes, width, height, crossings: crossings(nodes, edges, pos, dir) };
-}
-
-/** Belts that cross, counting each belt as a straight line from its output handle to its input handle. */
-function crossings(nodes: Node[], edges: Edge[], pos: Map<string, Point>, dir: Direction): number {
-  const size = new Map(nodes.map((n) => [n.id, { w: n.width ?? 0, h: n.height ?? 0 }]));
-  const out = (id: string) => {
-    const p = pos.get(id)!;
-    const s = size.get(id)!;
-    return dir === 'LR' ? { x: p.x + s.w, y: p.y + s.h / 2 } : { x: p.x + s.w / 2, y: p.y + s.h };
-  };
-  const into = (id: string) => {
-    const p = pos.get(id)!;
-    const s = size.get(id)!;
-    return dir === 'LR' ? { x: p.x, y: p.y + s.h / 2 } : { x: p.x + s.w / 2, y: p.y };
-  };
-  const lines = edges.map((e) => ({ e, a: out(e.source), b: into(e.target) }));
-  const side = (p: Point, q: Point, r: Point) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
-  let n = 0;
-  for (let i = 0; i < lines.length; i++) {
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[i];
-      const m = lines[j];
-      if (l.e.source === m.e.source || l.e.target === m.e.target) continue;
-      if (side(l.a, l.b, m.a) * side(l.a, l.b, m.b) < 0 && side(m.a, m.b, l.a) * side(m.a, m.b, l.b) < 0) n++;
-    }
-  }
-  return n;
-}
-
-/**
- * Tries each ranking strategy in each allowed direction. Within a direction the fewest crossing
- * belts wins; between directions, the one that shows the whole factory bigger on this screen,
- * unless it's only slightly better than the way the screen is shaped.
- */
-function layout(nodes: Node[], edges: Edge[], opts: GraphOptions): Direction {
-  const { dir, box } = opts;
-  const natural: Direction = box && box.height > box.width ? 'TB' : 'LR';
-  const dirs: Direction[] = dir ? [dir] : box ? ['LR', 'TB'] : ['LR'];
-  const best = dirs.map((d) => RANKERS.map((r) => place(nodes, edges, d, r, opts)).reduce((a, b) => (b.crossings < a.crossings ? b : a)));
-  const fit = (p: Placement) => (box ? Math.min(box.width / p.width, box.height / p.height) : 1);
-  const pick = best.reduce((a, b) => {
-    const [x, y] = a.dir === natural ? [a, b] : [b, a];
-    return fit(y) > fit(x) * 1.2 ? y : x;
-  });
-  for (const n of nodes) n.position = pick.pos.get(n.id)!;
-  for (const e of edges) {
-    const r = pick.routes.get(e.id)!;
-    (e.data as FlowEdgeData | PowerEdgeData).route = {
-      ...r,
-      from: pick.pos.get(e.source)!,
-      to: pick.pos.get(e.target)!,
-      routing: 'SPLINES' as const,
-    };
-  }
-  return pick.dir;
 }

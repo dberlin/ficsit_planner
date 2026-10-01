@@ -1,3 +1,5 @@
+import type { Route } from './graph';
+
 /** A spot on the floor, in floor pixels. */
 export interface Point {
   x: number;
@@ -42,6 +44,22 @@ export function routeSvgPath(points: Point[], routing: EdgeRouting): string {
     return d;
   }
   return rounded(points, routing === 'ORTHOGONAL' ? CORNER : 0);
+}
+
+const moved = (a: Point | undefined, b: Point) => !a || Math.abs(a.x - b.x) > 0.5 || Math.abs(a.y - b.y) > 0.5;
+
+/**
+ * The belt's path and label spot: the laid-out route while both machines are where the layout put them, otherwise
+ * a plain curve between their handles.
+ */
+export function edgePath(
+  route: Route | undefined,
+  from: Point | undefined,
+  to: Point | undefined,
+  fallback: () => [string, number, number],
+): [string, number, number] {
+  if (!route || moved(from, route.from) || moved(to, route.to)) return fallback();
+  return [routeSvgPath(route.points, route.routing), route.label.x, route.label.y];
 }
 
 /** A belt as laid out: the machines at its ends and the points it runs through. */

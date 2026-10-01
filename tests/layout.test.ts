@@ -5,7 +5,8 @@ import { data } from '../src/lib/data';
 import { testEngine } from './elkEngine';
 import { buildGraph, type FlowEdgeData, type Port } from '../src/lib/graph';
 import { type Floor, gridLayout, layoutGraph, routesOf } from '../src/lib/layout';
-import { countCrossings } from '../src/lib/routes';
+import { latestOnly } from '../src/lib/layoutClient';
+import { countCrossings, edgePath } from '../src/lib/routes';
 import { solve } from '../src/lib/solver';
 
 let highs: Highs;
@@ -149,4 +150,31 @@ test('the plain grid fallback keeps cards apart and gives every belt its handles
   expectNoOverlap(floor.nodes);
   const ids = new Set(floor.nodes.flatMap((n) => n.handles!.map((h) => h.id)));
   for (const e of floor.edges) expect(ids.has(e.sourceHandle!) && ids.has(e.targetHandle!)).toBe(true);
+});
+
+test('latest wins: an older layout finishing late is dropped', async () => {
+  const take = latestOnly<string>();
+  let finishOld!: (v: string) => void;
+  const old = take(new Promise<string>((r) => (finishOld = r)));
+  const fresh = take(Promise.resolve('new'));
+  finishOld('old');
+  expect(await fresh).toBe('new');
+  expect(await old).toBeUndefined();
+});
+
+test('route is dropped for moved nodes: the belt falls back to a curve', () => {
+  const route = {
+    points: [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+    ],
+    label: { x: 25, y: 0 },
+    from: { x: 0, y: 0 },
+    to: { x: 60, y: 0 },
+    routing: 'POLYLINE' as const,
+  };
+  const fallback = (): [string, number, number] => ['curve', 1, 2];
+  expect(edgePath(route, { x: 0, y: 0 }, { x: 60, y: 0 }, fallback)).toEqual(['M0,0 L50,0', 25, 0]);
+  expect(edgePath(route, { x: 0, y: 0 }, { x: 90, y: 40 }, fallback)).toEqual(['curve', 1, 2]);
+  expect(edgePath(undefined, undefined, undefined, fallback)).toEqual(['curve', 1, 2]);
 });

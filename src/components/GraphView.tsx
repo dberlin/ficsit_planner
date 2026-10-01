@@ -29,13 +29,15 @@ import {
   type EndpointNodeData,
   type FlowEdgeData,
   type MachineNodeData,
-  type Point,
   type PowerEdgeData,
   type PowerNodeData,
   type Port,
   runExtra,
 } from '../lib/graph';
 import { useT } from '../lib/i18n';
+import { type Floor, gridLayout, layoutGraph } from '../lib/layout';
+import { latestOnly, layoutInBackground } from '../lib/layoutClient';
+import { edgePath } from '../lib/routes';
 import { generatorById } from '../lib/data';
 import { minerLabel, recipeLabel } from '../lib/text';
 import { COARSE, useMediaQuery } from '../lib/useMediaQuery';
@@ -395,19 +397,12 @@ function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourceP
   const still = useFlowStore(stillSelector);
   const labels = useStore((s) => s.settings.beltLabels);
   const { mw, route } = d as PowerEdgeData;
-  const dir = useContext(Flow);
   const from = useInternalNode(source)?.internals.positionAbsolute;
   const to = useInternalNode(target)?.internals.positionAbsolute;
-  let path: string;
-  let lx: number;
-  let ly: number;
-  if (route && !moved(from, route.from) && !moved(to, route.to)) {
-    path = routePath([{ x: sourceX, y: sourceY }, ...route.points, { x: targetX, y: targetY }], dir);
-    lx = route.label.x;
-    ly = route.label.y;
-  } else {
-    [path, lx, ly] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-  }
+  const [path, lx, ly] = edgePath(route, from, to, () => {
+    const [p, x, y] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+    return [p, x, y];
+  });
   const lit = focus.nodes !== undefined && (focus.nodes.has(source) || focus.nodes.has(target));
   const faded = focus.nodes !== undefined && !lit;
   const state = `${faded ? 'faded' : ''} ${lit ? 'lit' : ''} ${still ? 'still' : ''}`;
@@ -434,28 +429,6 @@ function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourceP
   );
 }
 
-/**
- * A belt through the route's bends. Each stretch leaves and arrives straight along the line's
- * direction, so it never overshoots or loops where several belts meet at one input.
- */
-function routePath(pts: Point[], dir: Direction): string {
-  let d = `M${pts[0].x},${pts[0].y}`;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    if (dir === 'LR') {
-      const mx = (a.x + b.x) / 2;
-      d += ` C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}`;
-    } else {
-      const my = (a.y + b.y) / 2;
-      d += ` C${a.x},${my} ${b.x},${my} ${b.x},${b.y}`;
-    }
-  }
-  return d;
-}
-
-const moved = (a: Point | undefined, b: Point) => !a || Math.abs(a.x - b.x) > 0.5 || Math.abs(a.y - b.y) > 0.5;
-
 const MAX_DRAWN_LANES = 6;
 
 /** A conveyor belt (rails, bed, moving slats) or a pipe (casing, flowing fluid) along the edge. */
@@ -468,20 +441,13 @@ function FlowEdge({ source, target, sourceX, sourceY, targetX, targetY, sourcePo
   const oneColor = useStore((s) => s.settings.beltColors === 'one');
   const { item, rate, transport, lanes, route } = d as FlowEdgeData;
   const it = data.items[item];
-  const dir = useContext(Flow);
   const from = useInternalNode(source)?.internals.positionAbsolute;
   const to = useInternalNode(target)?.internals.positionAbsolute;
-  let path: string;
-  let lx: number;
-  let ly: number;
-  if (route && !moved(from, route.from) && !moved(to, route.to)) {
-    // As laid out: follow the route around the machines, through the label's reserved spot.
-    path = routePath([{ x: sourceX, y: sourceY }, ...route.points, { x: targetX, y: targetY }], dir);
-    lx = route.label.x;
-    ly = route.label.y;
-  } else {
-    [path, lx, ly] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-  }
+  // As laid out: follow the route around the machines, through the label's reserved spot.
+  const [path, lx, ly] = edgePath(route, from, to, () => {
+    const [p, x, y] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+    return [p, x, y];
+  });
   const fluid = it.form !== 'solid';
   // Side by side lines widen the belt, up to a point: past a few, the label's "123×" says how many.
   const drawn = Math.min(lanes, MAX_DRAWN_LANES);
@@ -772,32 +738,47 @@ export function GraphView({
   const spacing = useStore((s) => s.settings.spacing);
   const beltSplit = useStore((s) => s.settings.beltSplit);
   const pipeSplit = useStore((s) => s.settings.pipeSplit);
-  // Uncontrolled flow remounted per solve: nodes stay draggable, and each new solve lays out fresh.
-  const { nodes, edges, dir, key, sig } = useMemo(() => {
+  const placement = useStore((s) => s.settings.layoutPlacement);
+  const routing = useStore((s) => s.settings.edgeRouting);
+  const effort = useStore((s) => s.settings.layoutEffort);
+  const built = useMemo(
+    () =>
+      buildGraph(result, tier, {
+        scale,
+        text,
+        consumers,
+        split: {
+          belt: data.belts.find((b) => b.id === beltSplit)?.rate,
+          pipe: data.pipes.find((p) => p.id === pipeSplit)?.rate,
+        },
+      }),
+    [result, tier, scale, text, consumers, beltSplit, pipeSplit],
+  );
+  // Uncontrolled flow remounted per layout: nodes stay draggable, and each new solve lays out fresh. The last floor
+  // stays on screen while the next one is laid out, and a layout overtaken by a newer one is dropped.
+  const [take] = useState(() => latestOnly<Floor>());
+  const [floor, setFloor] = useState<Floor & { key: number; sig: string }>();
+  useEffect(() => {
     const box = document.querySelector('.floor-view')?.getBoundingClientRect();
-    const g = buildGraph(result, tier, {
-      dir: chosen,
-      box: box && { width: box.width, height: box.height },
-      scale,
-      text,
-      spacing,
-      consumers,
-      split: {
-        belt: data.belts.find((b) => b.id === beltSplit)?.rate,
-        pipe: data.pipes.find((p) => p.id === pipeSplit)?.rate,
-      },
-    });
-    return {
-      ...g,
-      key: ++solveCount,
-      sig:
+    const opts = { dir: chosen, box: box && { width: box.width, height: box.height }, scale, text, spacing, placement, routing, effort };
+    take(
+      layoutGraph(built, opts, layoutInBackground).catch((err) => {
+        console.error('Floor layout failed; showing a plain grid', err);
+        return gridLayout(built, chosen ?? 'LR');
+      }),
+    ).then((g) => {
+      if (!g) return;
+      const sig =
         g.nodes
           .map((n) => n.id)
           .sort()
-          .join('|') + g.dir,
-    };
-  }, [result, tier, chosen, scale, text, spacing, consumers, beltSplit, pipeSplit]);
+          .join('|') + g.dir;
+      setFloor({ ...g, key: ++solveCount, sig });
+    });
+  }, [built, chosen, scale, text, spacing, placement, routing, effort, take]);
   const exMap = useMemo(() => new Map(extraction.map((u) => [u.item, u])), [extraction]);
+  if (!floor) return null;
+  const { nodes, edges, dir, key, sig } = floor;
   return (
     <Extraction.Provider value={exMap}>
       <Links.Provider value={links}>

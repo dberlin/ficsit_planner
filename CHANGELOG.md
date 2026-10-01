@@ -2,6 +2,21 @@
 
 All notable changes to FICSIT Planner. Dates are when the version was finished.
 
+## Unreleased
+
+### Added
+
+- **Belt and pipe tiers on the floor:** Settings → Floor → Split for belts / Split for pipes splits each machine line
+  into groups whose belts and pipes all fit the chosen tier, each group with its own clocks, power, shards and
+  somersloops.
+- **Layout settings:** machine placement, belt routing (right angles, curves or straight) and layout effort.
+
+### Changed
+
+- **The floor is laid out by ELK:** belts run at right angles around machines by default, each belt meets its machine
+  at its own spot, and the layout tries several arrangements for the fewest crossing belts. Laying out happens in the
+  background, so big factories no longer pause the page.
+
 ## 0.12.3 — 2026-10-01
 
 ### Changed

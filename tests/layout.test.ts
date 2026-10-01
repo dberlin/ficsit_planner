@@ -178,3 +178,15 @@ test('route is dropped for moved nodes: the belt falls back to a curve', () => {
   expect(edgePath(route, { x: 0, y: 0 }, { x: 90, y: 40 }, fallback)).toEqual(['curve', 1, 2]);
   expect(edgePath(undefined, undefined, undefined, fallback)).toEqual(['curve', 1, 2]);
 });
+
+test('every belt label sits in the gap between the machines it joins, with room kept for it', async () => {
+  const floor = await layoutGraph(frames(), { dir: 'LR', effort: 'fast' }, testEngine);
+  const byId = new Map(floor.nodes.map((n) => [n.id, n]));
+  for (const e of floor.edges) {
+    const { label } = (e.data as FlowEdgeData).route!;
+    const src = byId.get(e.source)!;
+    const dst = byId.get(e.target)!;
+    expect(label.x - 88).toBeGreaterThanOrEqual(src.position.x + src.width!);
+    expect(label.x + 88).toBeLessThanOrEqual(dst.position.x);
+  }
+});

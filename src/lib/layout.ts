@@ -84,7 +84,8 @@ export function toElk(graph: Graph, opts: LayoutOptions, dir: Direction, seed: n
         id: e.id,
         sources: [e.sourceHandle!],
         targets: [e.targetHandle!],
-        labels: [{ id: `${e.id}:label`, text: '', ...label }],
+        // ELK skips a label with no text, keeping no room for it; ours are drawn by the floor, so any text will do.
+        labels: [{ id: `${e.id}:label`, text: e.id, ...label }],
       }),
     ),
   };

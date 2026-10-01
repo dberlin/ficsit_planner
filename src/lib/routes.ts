@@ -83,12 +83,21 @@ function crosses(p1: Point, p2: Point, p3: Point, p4: Point): boolean {
  * polygon). Belts sharing a machine at either end don't count against each other: they meet there anyway.
  */
 export function countCrossings(routes: RoutedEdge[]): number {
+  // Each route's bounding box: two belts whose boxes don't overlap can't cross, which rules out most pairs on a big floor.
+  const boxes = routes.map(({ points }) => ({
+    x0: Math.min(...points.map((p) => p.x)),
+    x1: Math.max(...points.map((p) => p.x)),
+    y0: Math.min(...points.map((p) => p.y)),
+    y1: Math.max(...points.map((p) => p.y)),
+  }));
   let n = 0;
   for (let i = 0; i < routes.length; i++) {
     for (let j = i + 1; j < routes.length; j++) {
       const a = routes[i];
       const b = routes[j];
       if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+      const [p, q] = [boxes[i], boxes[j]];
+      if (p.x1 < q.x0 || q.x1 < p.x0 || p.y1 < q.y0 || q.y1 < p.y0) continue;
       for (let s = 1; s < a.points.length; s++)
         for (let t = 1; t < b.points.length; t++) if (crosses(a.points[s - 1], a.points[s], b.points[t - 1], b.points[t])) n++;
     }

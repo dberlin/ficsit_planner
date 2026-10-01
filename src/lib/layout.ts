@@ -41,6 +41,28 @@ const BIG = 400;
 /** Gap between belts, and between a belt and a machine, before spacing and card size. */
 const BELT_GAP = 12;
 
+/** Room along a card's side for each belt meeting it, so belts side by side stay apart. */
+const PORT_PITCH = 14;
+
+/**
+ * Cards with more belts on one side than fit there grow along that side (taller left to right, wider top to
+ * bottom), and say so in `data.side` for the stylesheet. New node objects; the built ones are untouched.
+ */
+function roomForPorts(graph: Graph, dir: Direction): Graph {
+  const ins = new Map<string, number>();
+  const outs = new Map<string, number>();
+  for (const e of graph.edges) {
+    outs.set(e.source, (outs.get(e.source) ?? 0) + 1);
+    ins.set(e.target, (ins.get(e.target) ?? 0) + 1);
+  }
+  const along = dir === 'LR' ? 'height' : 'width';
+  const nodes = graph.nodes.map((n) => {
+    const need = (Math.max(ins.get(n.id) ?? 0, outs.get(n.id) ?? 0) + 1) * PORT_PITCH;
+    return need <= (n[along] ?? 0) ? n : { ...n, [along]: need, data: { ...n.data, side: need } };
+  });
+  return { nodes, edges: graph.edges };
+}
+
 /** The graph in ELK's terms, for one direction and one random seed. */
 export function toElk(graph: Graph, opts: LayoutOptions, dir: Direction, seed: number): ElkNode {
   const gap = (opts.scale ?? 1) * (opts.spacing ?? 1);
@@ -148,14 +170,14 @@ export async function layoutGraph(graph: Graph, opts: LayoutOptions, engine: Eng
   const routing = opts.routing ?? 'ORTHOGONAL';
   const best = await Promise.all(
     dirs.map(async (d) => {
+      const sized = roomForPorts(graph, d);
       const runs = await Promise.all(
         seeds.map(async (seed) => {
-          const laid = await engine(toElk(graph, opts, d, seed), isStale);
-          const floor = fromElk(graph, laid, d, routing);
-          return { floor, width: laid.width ?? 0, height: laid.height ?? 0, crossings: countCrossings(routesOf(floor)) };
+          const laid = await engine(toElk(sized, opts, d, seed), isStale);
+          return { floor: fromElk(sized, laid, d, routing), width: laid.width ?? 0, height: laid.height ?? 0 };
         }),
       );
-      return runs.reduce((a, b) => (b.crossings < a.crossings ? b : a));
+      return fewestCrossings(runs);
     }),
   );
   const fit = (p: { width: number; height: number }) => (box ? Math.min(box.width / p.width, box.height / p.height) : 1);
@@ -165,8 +187,16 @@ export async function layoutGraph(graph: Graph, opts: LayoutOptions, engine: Eng
   }).floor;
 }
 
+/** The run with the fewest crossing belts, the earlier one on a tie. With one run there is nothing to count. */
+export function fewestCrossings<T extends { floor: Floor }>(runs: T[]): T {
+  if (runs.length === 1) return runs[0];
+  return runs.map((run) => ({ run, crossings: countCrossings(routesOf(run.floor)) })).reduce((a, b) => (b.crossings < a.crossings ? b : a))
+    .run;
+}
+
 /** When no layout engine works: cards in a plain grid in build order, belts as plain curves between their handles. */
-export function gridLayout(graph: Graph, dir: Direction): Floor {
+export function gridLayout(built: Graph, dir: Direction): Floor {
+  const graph = roomForPorts(built, dir);
   const cols = Math.max(1, Math.ceil(Math.sqrt(graph.nodes.length)));
   const cellW = Math.max(0, ...graph.nodes.map((n) => n.width ?? 0)) + 80;
   const cellH = Math.max(0, ...graph.nodes.map((n) => n.height ?? 0)) + 80;

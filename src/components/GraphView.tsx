@@ -17,11 +17,12 @@ import {
   type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, type CSSProperties, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 import { BELT_COLORS } from '../lib/belts';
 import { groupClocks } from '../lib/clocks';
 import { data } from '../lib/data';
 import type { ExtractionUse } from '../lib/extraction';
+import { recallFloor, rememberFloor } from '../lib/floorCache';
 import {
   buildGraph,
   type Consumer,
@@ -65,6 +66,17 @@ export interface FactoryLinks {
 const Links = createContext<FactoryLinks | undefined>(undefined);
 const inSide = (dir: Direction) => (dir === 'TB' ? Position.Top : Position.Left);
 const outSide = (dir: Direction) => (dir === 'TB' ? Position.Bottom : Position.Right);
+
+/**
+ * A card grown by the layout to fit its belts: its new length along the side the belts meet, divided by the card
+ * size, since the stylesheet zooms every card by it.
+ */
+function sideStyle(d: Record<string, unknown>, dir: Direction): CSSProperties {
+  const { side } = d as { side?: number };
+  if (!side) return {};
+  const size = `calc(${side}px / var(--card-scale, 1))`;
+  return dir === 'LR' ? { height: size } : { width: size };
+}
 
 /** A card's belt handles, one per port, where the layout put them. */
 function Ports({ data: d }: { data: Record<string, unknown> }) {
@@ -159,12 +171,17 @@ function GeneratorNode({ id, data: d, selected }: NodeProps) {
   const { name, num } = useT();
   const { use, generation = 0, group } = d as MachineNodeData;
   const faded = useFaded(id);
+  const dir = useContext(Flow);
   const gen = generatorById.get(use.recipe.machine);
   const fuel = use.recipe.inputs.find((i) => data.items[i.item]?.energy)?.item;
   return (
     <div
       className={`machine-node power gen-${gen?.kind ?? 'fuel'} ${faded ? 'faded' : ''} ${selected ? 'selected' : ''}`}
-      style={{ ['--run-extra' as string]: runExtra(use), ...(use.shards > 0 ? { ['--mod-bar' as string]: 'var(--shard)' } : {}) }}
+      style={{
+        ['--run-extra' as string]: runExtra(use),
+        ...(use.shards > 0 ? { ['--mod-bar' as string]: 'var(--shard)' } : {}),
+        ...sideStyle(d, dir),
+      }}
     >
       <Ports data={d} />
       <div className="machine-strip">
@@ -199,12 +216,13 @@ function MachineNode(props: NodeProps) {
   const { use, group } = d as MachineNodeData;
   const { recipe } = use;
   const faded = useFaded(id);
+  const dir = useContext(Flow);
   if (recipe.kind === 'power') return <GeneratorNode {...props} />;
   const bar = modBar(use.shards, use.sloops);
   return (
     <div
       className={`machine-node ${recipe.kind} ${faded ? 'faded' : ''} ${selected ? 'selected' : ''}`}
-      style={{ ['--run-extra' as string]: runExtra(use), ...(bar ? { ['--mod-bar' as string]: bar } : {}) }}
+      style={{ ['--run-extra' as string]: runExtra(use), ...(bar ? { ['--mod-bar' as string]: bar } : {}), ...sideStyle(d, dir) }}
     >
       <Ports data={d} />
       {/* The in-game build menu look: a coloured strip naming what it makes, the building and its draw below. */}
@@ -294,6 +312,7 @@ function EndpointNode({ id, data: d }: NodeProps) {
   const { name, num, t } = useT();
   const { kind, item, rate } = d as EndpointNodeData;
   const faded = useFaded(id);
+  const dir = useContext(Flow);
   const ex = useContext(Extraction).get(item);
   const links = useContext(Links);
   const sent = kind === 'target' ? links?.to.get(item) : undefined;
@@ -308,7 +327,7 @@ function EndpointNode({ id, data: d }: NodeProps) {
   return (
     <div
       className={`endpoint-node ${kind} ${faded ? 'faded' : ''}`}
-      style={it.form !== 'solid' ? { ['--fluid-color' as string]: it.color ?? 'var(--fluid)' } : undefined}
+      style={{ ...(it.form !== 'solid' ? { ['--fluid-color' as string]: it.color ?? 'var(--fluid)' } : {}), ...sideStyle(d, dir) }}
     >
       <Ports data={d} />
       <Slot id={item} size={60} tone={kind === 'target' ? 'target' : 'default'} />
@@ -351,10 +370,11 @@ function PowerNode({ id, data: d }: NodeProps) {
   const { t, num } = useT();
   const { kind, label, mw, tone, boost, balance = 0 } = d as PowerNodeData;
   const faded = useFaded(id);
+  const dir = useContext(Flow);
   if (kind === 'grid') {
     const short = balance < -0.5;
     return (
-      <div className={`power-node grid ${short ? 'short' : ''} ${faded ? 'faded' : ''}`}>
+      <div className={`power-node grid ${short ? 'short' : ''} ${faded ? 'faded' : ''}`} style={sideStyle(d, dir)}>
         <Ports data={d} />
         <span className="grid-head">
           <Glyph name="bolt" size={18} />
@@ -372,7 +392,7 @@ function PowerNode({ id, data: d }: NodeProps) {
     );
   }
   return (
-    <div className={`power-node consumer ${tone ?? ''} ${faded ? 'faded' : ''}`}>
+    <div className={`power-node consumer ${tone ?? ''} ${faded ? 'faded' : ''}`} style={sideStyle(d, dir)}>
       <Ports data={d} />
       <Glyph name={tone === 'chain' || tone === 'out' ? 'bolt' : tone === 'other' ? 'sliders' : 'factory'} size={26} />
       <span className="consumer-text">
@@ -719,6 +739,9 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
   );
 }
 
+/** A laid-out floor as shown: remounted by `key`, its camera kept across layouts with the same `sig`. */
+type Shown = Floor & { key: number; sig: string };
+
 export function GraphView({
   result,
   extraction,
@@ -741,6 +764,23 @@ export function GraphView({
   const placement = useStore((s) => s.settings.layoutPlacement);
   const routing = useStore((s) => s.settings.edgeRouting);
   const effort = useStore((s) => s.settings.layoutEffort);
+  const gridLines = useStore((s) => s.settings.gridLines);
+  const { t } = useT();
+  // Everything the floor is built and laid out from, besides the solve itself: the floor last laid out with the same
+  // comes straight back when you return to it.
+  const settingsKey = JSON.stringify([
+    tier,
+    chosen,
+    scale,
+    text,
+    spacing,
+    beltSplit,
+    pipeSplit,
+    placement,
+    routing,
+    effort,
+    consumers?.map((c) => [c.id, c.mw]),
+  ]);
   const built = useMemo(
     () =>
       buildGraph(result, tier, {
@@ -756,40 +796,66 @@ export function GraphView({
   );
   // Uncontrolled flow remounted per layout: nodes stay draggable, and each new solve lays out fresh. The last floor
   // stays on screen while the next one is laid out, and a layout overtaken by a newer one is dropped.
-  const [take] = useState(() => latestOnly<Floor | undefined>());
-  const [floor, setFloor] = useState<Floor & { key: number; sig: string }>();
+  const [take] = useState(() => latestOnly<Shown | undefined>());
+  const [floor, setFloor] = useState(() => recallFloor<Shown>(result, settingsKey));
+  // Busy from the first render when there is nothing to show yet, so nothing waiting on the floor goes ahead early.
+  const [pending, setPending] = useState(() => !recallFloor(result, settingsKey));
   useEffect(() => {
+    const kept = recallFloor<Shown>(result, settingsKey);
     const box = document.querySelector('.floor-view')?.getBoundingClientRect();
     const opts = { dir: chosen, box: box && { width: box.width, height: box.height }, scale, text, spacing, placement, routing, effort };
+    setPending(!kept);
+    // Through `take` even when kept, so a layout still running for other settings can't replace it.
     take((isStale) =>
-      layoutGraph(built, opts, layoutInBackground, isStale).catch((err) => {
-        // Dropped for a newer layout: nothing to show, the newer one will be.
-        if (isStale()) return undefined;
-        console.error('Floor layout failed; showing a plain grid', err);
-        return gridLayout(built, chosen ?? 'LR');
-      }),
-    ).then((g) => {
-      if (!g) return;
-      const sig =
-        g.nodes
-          .map((n) => n.id)
-          .sort()
-          .join('|') + g.dir;
-      setFloor({ ...g, key: ++solveCount, sig });
+      kept
+        ? Promise.resolve(kept)
+        : layoutGraph(built, opts, layoutInBackground, isStale)
+            .catch((err) => {
+              // Dropped for a newer layout: nothing to show, the newer one will be.
+              if (isStale()) return undefined;
+              console.error('Floor layout failed; showing a plain grid', err);
+              return gridLayout(built, chosen ?? 'LR');
+            })
+            .then((g) => {
+              if (!g) return undefined;
+              const sig =
+                g.nodes
+                  .map((n) => n.id)
+                  .sort()
+                  .join('|') + g.dir;
+              const shown = { ...g, key: ++solveCount, sig };
+              rememberFloor(result, settingsKey, shown);
+              return shown;
+            }),
+    ).then((shown) => {
+      if (!shown) return;
+      setFloor(shown);
+      setPending(false);
     });
-  }, [built, chosen, scale, text, spacing, placement, routing, effort, take]);
+  }, [result, settingsKey, built, chosen, scale, text, spacing, placement, routing, effort, take]);
   const exMap = useMemo(() => new Map(extraction.map((u) => [u.item, u])), [extraction]);
-  if (!floor) return null;
+  // Busy like solving, so the floor says why it's empty or about to change.
+  const status = pending && <div className="busy laying-out">{t('layingOut')}</div>;
+  if (!floor)
+    return (
+      <>
+        {gridLines && <div className="floor-grid" />}
+        {status}
+      </>
+    );
   const { nodes, edges, dir, key, sig } = floor;
   return (
-    <Extraction.Provider value={exMap}>
-      <Links.Provider value={links}>
-        <Flow.Provider value={dir}>
-          <ReactFlowProvider key={key}>
-            <Canvas nodes={nodes} edges={edges} sig={sig} dir={dir} />
-          </ReactFlowProvider>
-        </Flow.Provider>
-      </Links.Provider>
-    </Extraction.Provider>
+    <>
+      <Extraction.Provider value={exMap}>
+        <Links.Provider value={links}>
+          <Flow.Provider value={dir}>
+            <ReactFlowProvider key={key}>
+              <Canvas nodes={nodes} edges={edges} sig={sig} dir={dir} />
+            </ReactFlowProvider>
+          </Flow.Provider>
+        </Links.Provider>
+      </Extraction.Provider>
+      {status}
+    </>
   );
 }

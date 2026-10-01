@@ -108,3 +108,16 @@ test('layouts overtaken by a newer one are dropped before they start, not run fo
   expect(ran).toBeLessThanOrEqual(4);
   expect(settled.filter((s) => s.status === 'rejected').length).toBe(12 - ran);
 });
+
+test("an old pool's timer never gives up a newer pool", async () => {
+  const fallback = countedFallback();
+  // A pool that never answers, replaced at once by one that answers questions quickly but lays out slowly.
+  const silent = URL.createObjectURL(new Blob(['self.onmessage = () => {};'], { type: 'text/javascript' }));
+  setWorkerFactory(() => new Worker(silent, { type: 'module' }), fallback.engine);
+  layoutInBackground(tiny()).catch(() => {});
+  const slow = fakeElk(5000);
+  setWorkerFactory(() => new Worker(slow, { type: 'module' }), fallback.engine);
+  const laid = await layoutInBackground(tiny());
+  expect(fallback.calls.n).toBe(0);
+  expect(laid.id).toBe('root');
+}, 10_000);

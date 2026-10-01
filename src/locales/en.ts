@@ -53,6 +53,7 @@ export const en = {
   inputs: 'In',
   outputs: 'Out',
   solving: 'Solving',
+  layingOut: 'Laying out',
   remove: 'Remove',
   noResults: 'No matches',
   noKindResults: 'No {kind} recipes match.',

@@ -4,7 +4,7 @@ import loadHighs, { type Highs } from 'highs';
 import { data } from '../src/lib/data';
 import { testEngine } from './elkEngine';
 import { buildGraph, type FlowEdgeData, type Port } from '../src/lib/graph';
-import { type Engine, type Floor, gridLayout, layoutGraph, routesOf } from '../src/lib/layout';
+import { type Engine, type Floor, fewestCrossings, gridLayout, layoutGraph, routesOf } from '../src/lib/layout';
 import { latestOnly } from '../src/lib/layoutClient';
 import { countCrossings, edgePath } from '../src/lib/routes';
 import { solve } from '../src/lib/solver';
@@ -209,4 +209,39 @@ test('a very big floor is laid out once per direction, whatever the effort', asy
   };
   await layoutGraph({ nodes: chain, edges: links }, { dir: 'LR', effort: 'thorough' }, counted);
   expect(runs).toBe(1);
+});
+
+test('a card with many belts on one side grows so its belts stay apart', async () => {
+  const graph = buildGraph(plan([{ item: 'Desc_IronPlate_C', rate: 1200 }]), 9, { split: { belt: 60 } });
+  for (const dir of ['LR', 'TB'] as const) {
+    const floor = await layoutGraph(graph, { dir, effort: 'fast' }, testEngine);
+    for (const n of floor.nodes) {
+      const ports = (n.data as { ports?: Port[]; side?: number }).ports ?? [];
+      const side = dir === 'LR' ? n.height! : n.width!;
+      for (const type of ['source', 'target'] as const) {
+        const offsets = ports
+          .filter((p) => p.type === type)
+          .map((p) => p.offset)
+          .sort((a, b) => a - b);
+        for (let i = 1; i < offsets.length; i++) expect(offsets[i] - offsets[i - 1], `${n.id} ${dir}`).toBeGreaterThanOrEqual(12);
+        for (const o of offsets) expect(o).toBeLessThanOrEqual(side);
+      }
+    }
+    // The ore card feeding 20 smelter groups is the one that has to grow, and says so for the stylesheet.
+    const ore = floor.nodes.find((n) => n.id === 'raw:Desc_OreIron_C')!;
+    expect((ore.data as { side?: number }).side).toBe(dir === 'LR' ? ore.height : ore.width);
+  }
+});
+
+test('with one arrangement to choose from, crossings are not counted at all', () => {
+  const only = {
+    floor: {
+      dir: 'LR' as const,
+      nodes: [],
+      get edges(): Edge[] {
+        throw new Error('counted');
+      },
+    },
+  };
+  expect(fewestCrossings([only])).toBe(only);
 });

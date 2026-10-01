@@ -1488,6 +1488,29 @@ button.slot:hover {
   color: var(--ficsit);
 }
 
+.busy.laying-out {
+  color: var(--dim);
+}
+
+/* Solving comes first: the floor is laid out again right after anyway. */
+.floor-view:has(> .busy:not(.laying-out)) > .busy.laying-out {
+  display: none;
+}
+
+/* The foundation grid while the first layout of a floor runs, the same lines React Flow draws once it's there. */
+.floor-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(#3b3b3b 1px, transparent 1px), linear-gradient(90deg, #3b3b3b 1px, transparent 1px),
+    linear-gradient(#2f2f2f 1px, transparent 1px), linear-gradient(90deg, #2f2f2f 1px, transparent 1px);
+  background-size:
+    160px 160px,
+    160px 160px,
+    40px 40px,
+    40px 40px;
+}
+
 .floor-bar {
   position: absolute;
   left: 18px;

@@ -3,7 +3,7 @@ import { Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
 import { groupClocks } from './clocks';
 import { data, transportFor, type Transport } from './data';
 import { plantIdOf } from './power';
-import type { RecipeUse, SolveResult } from './solver';
+import { splitUse, type RecipeUse, type SolveResult } from './solver';
 
 /** Left to right or top to bottom. The layout picks whichever fits the screen, unless the player chose. */
 export type Direction = 'LR' | 'TB';
@@ -14,6 +14,8 @@ export interface MachineNodeData extends Record<string, unknown> {
   use: RecipeUse;
   /** Generators: MW this plant puts on the grid, augmenter boost included. */
   generation?: number;
+  /** One of the groups a line was split into so each belt and pipe fits: group n of `of`. */
+  group?: { n: number; of: number };
 }
 
 /** Who draws from the grid: a factory, the fuel chain itself, what the player typed in, or the output sent on. */
@@ -143,12 +145,57 @@ export interface GraphOptions {
   spacing?: number;
   /** Power grid: what it feeds, drawn after the grid node. */
   consumers?: Consumer[];
+  /**
+   * Most a single belt (solids) or pipe (fluids) may carry, per minute. Lines whose flows don't fit are split
+   * into groups of whole machines that do, each fed and emptied by its own belts.
+   */
+  split?: { belt?: number; pipe?: number };
+}
+
+/** Most groups a line is split into; past this it stays whole and its belts show as lanes side by side. */
+const MAX_GROUPS = 50;
+
+/**
+ * The line as groups of consecutive machines, each as big as it can be with every item it takes in or sends
+ * out fitting on one belt or pipe. A machine that overflows one on its own gets a group to itself. Lines that
+ * already fit, and lines that would need more than MAX_GROUPS groups, stay whole.
+ */
+export function machineGroups(u: RecipeUse, capOf: (item: string) => number | undefined): RecipeUse[] {
+  const add = (sum: Map<string, number>, m: RecipeUse) => {
+    const next = new Map(sum);
+    for (const f of m.inputs) next.set(`in:${f.item}`, (next.get(`in:${f.item}`) ?? 0) + f.rate);
+    for (const f of m.outputs) next.set(`out:${f.item}`, (next.get(`out:${f.item}`) ?? 0) + f.rate);
+    return next;
+  };
+  const fits = (sum: Map<string, number>) =>
+    [...sum].every(([key, rate]) => {
+      const cap = capOf(key.slice(key.indexOf(':') + 1));
+      return cap === undefined || rate <= cap + 1e-6;
+    });
+  if (u.built < 2 || fits(add(new Map(), u))) return [u];
+  const sizes: number[] = [];
+  let sum = new Map<string, number>();
+  for (const m of splitUse(
+    u,
+    u.clocks.map(() => 1),
+  )) {
+    const next = add(sum, m);
+    if (sizes.length && fits(next)) {
+      sum = next;
+      sizes[sizes.length - 1]++;
+    } else {
+      sum = add(new Map(), m);
+      sizes.push(1);
+    }
+  }
+  return sizes.length < 2 || sizes.length > MAX_GROUPS ? [u] : splitUse(u, sizes);
 }
 
 /**
  * Turns an LP solution into a factory graph. Each item's producers are matched to its
  * consumers greedily (largest first), which keeps the number of belts low compared
- * to splitting every producer proportionally across every consumer.
+ * to splitting every producer proportionally across every consumer. With `opts.split`, lines are first split
+ * into machine groups, so no belt or pipe between machines carries more than the chosen one can.
  */
 export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions = {}): { nodes: Node[]; edges: Edge[]; dir: Direction } {
   const k = opts.scale ?? 1;
@@ -183,20 +230,33 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
   for (const s of result.supplies) push(producers, s.item, endpoint('supply', s.item, s.rate), s.rate);
   for (const m of result.missing) push(producers, m.item, endpoint('missing', m.item, m.rate), m.rate);
 
+  const capOf = (item: string) => (data.items[item]?.form === 'solid' ? opts.split?.belt : opts.split?.pipe) || undefined;
+  const plants: { id: string; mw: number }[] = [];
   for (const u of result.recipes) {
-    const id = `recipe:${u.recipe.id}`;
     const plant = plantIdOf(u.recipe.id);
-    nodes.push({
-      id,
-      type: 'machine',
-      position: { x: 0, y: 0 },
-      data: { use: u, generation: plant ? (result.grid?.plants[plant] ?? 0) : undefined } satisfies MachineNodeData,
-      ...box({ ...SIZE.machine, height: SIZE.machine.height + RUN_LINE * runExtra(u) }),
-      handles: [],
+    const generation = plant ? (result.grid?.plants[plant] ?? 0) : undefined;
+    const groups = opts.split?.belt || opts.split?.pipe ? machineGroups(u, capOf) : [u];
+    groups.forEach((g, i) => {
+      const id = groups.length > 1 ? `recipe:${u.recipe.id}#${i + 1}` : `recipe:${u.recipe.id}`;
+      // A generator group puts its share of the plant's power on the grid, by how much fuel it burns.
+      const mw = generation === undefined ? undefined : u.count > 0 ? (generation * g.count) / u.count : generation / groups.length;
+      nodes.push({
+        id,
+        type: 'machine',
+        position: { x: 0, y: 0 },
+        data: {
+          use: g,
+          generation: mw,
+          group: groups.length > 1 ? { n: i + 1, of: groups.length } : undefined,
+        } satisfies MachineNodeData,
+        ...box({ ...SIZE.machine, height: SIZE.machine.height + RUN_LINE * runExtra(g) }),
+        handles: [],
+      });
+      sides.set(id, { source: true, target: true });
+      if (mw !== undefined) plants.push({ id, mw });
+      for (const o of g.outputs) push(producers, o.item, id, o.rate);
+      for (const x of g.inputs) push(consumers, x.item, id, x.rate);
     });
-    sides.set(id, { source: true, target: true });
-    for (const o of u.outputs) push(producers, o.item, id, o.rate);
-    for (const i of u.inputs) push(consumers, i.item, id, i.rate);
   }
 
   for (const t of result.targets) push(consumers, t.item, endpoint('target', t.item, t.rate), t.rate);
@@ -230,7 +290,7 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
     }
   }
 
-  if (result.grid) addGrid(result, nodes, edges, sides, opts.consumers ?? [], box);
+  if (result.grid) addGrid(result, plants, nodes, edges, sides, opts.consumers ?? [], box);
 
   const dir = layout(nodes, edges, opts);
   for (const n of nodes) n.handles = handlesFor({ width: n.width!, height: n.height! }, sides.get(n.id)!, dir);
@@ -243,6 +303,7 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
  */
 function addGrid(
   result: SolveResult,
+  plants: { id: string; mw: number }[],
   nodes: Node[],
   edges: Edge[],
   sides: Map<string, { source: boolean; target: boolean }>,
@@ -260,17 +321,8 @@ function addGrid(
     handles: [],
   });
   sides.set('grid', { source: consumers.length > 0, target: true });
-  for (const u of result.recipes) {
-    const plant = plantIdOf(u.recipe.id);
-    if (!plant) continue;
-    const id = `recipe:${u.recipe.id}`;
-    edges.push({
-      id: `${id}>grid`,
-      source: id,
-      target: 'grid',
-      type: 'power',
-      data: { mw: grid.plants[plant] ?? 0 } satisfies PowerEdgeData,
-    });
+  for (const { id, mw } of plants) {
+    edges.push({ id: `${id}>grid`, source: id, target: 'grid', type: 'power', data: { mw } satisfies PowerEdgeData });
   }
   for (const c of consumers) {
     const id = `use:${c.id}`;

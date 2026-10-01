@@ -4,7 +4,7 @@ import { groupClocks } from './clocks';
 import { data, transportFor, type Transport } from './data';
 import { plantIdOf } from './power';
 import { splitUse, type RecipeUse, type SolveResult } from './solver';
-import type { Point } from './routes';
+import type { EdgeRouting, Point } from './routes';
 export type { Point } from './routes';
 
 /** Left to right or top to bottom. The layout picks whichever fits the screen, unless the player chose. */
@@ -59,12 +59,13 @@ export interface EndpointNodeData extends Record<string, unknown> {
 
 /** The belt's path from the layout: around machines, through a spot kept free for its label. */
 export interface Route {
-  /** Bends between the two machines; the label sits on the middle one. */
+  /** The whole path, from the output handle to the input handle. */
   points: Point[];
   label: Point;
   /** Where both machines were laid out. Once either is dragged, the belt falls back to a plain curve. */
   from: Point;
   to: Point;
+  routing: EdgeRouting;
 }
 
 export interface FlowEdgeData extends Record<string, unknown> {
@@ -174,8 +175,8 @@ export const cardBox = (size: Box, k: number, text: number): Box => ({
  * Space kept for each belt label, so labels never sit on a machine. Dagre gives labels a rank of
  * their own, so ranksep is the gap on both sides of that label rank together.
  */
-const LABEL = { width: 176, height: 50 };
-const SPACING = {
+export const LABEL = { width: 176, height: 50 };
+export const SPACING = {
   LR: { nodesep: 34, ranksep: 70 },
   TB: { nodesep: 30, ranksep: 70 },
 };
@@ -476,7 +477,12 @@ function layout(nodes: Node[], edges: Edge[], opts: GraphOptions): Direction {
   for (const n of nodes) n.position = pick.pos.get(n.id)!;
   for (const e of edges) {
     const r = pick.routes.get(e.id)!;
-    (e.data as FlowEdgeData | PowerEdgeData).route = { ...r, from: pick.pos.get(e.source)!, to: pick.pos.get(e.target)! };
+    (e.data as FlowEdgeData | PowerEdgeData).route = {
+      ...r,
+      from: pick.pos.get(e.source)!,
+      to: pick.pos.get(e.target)!,
+      routing: 'SPLINES' as const,
+    };
   }
   return pick.dir;
 }

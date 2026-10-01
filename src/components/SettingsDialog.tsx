@@ -56,7 +56,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [section, setSection] = useState<Section>(unseen ? 'updates' : 'layout');
   // On a phone the sections scroll sideways; bring the one it opened on into view.
   const nav = useRef<HTMLElement>(null);
-  useEffect(() => nav.current?.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }), []);
+  useEffect(() => {
+    nav.current?.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, []);
   const saved = useStore((s) => s.settings);
   const savedDir = useStore((s) => s.graphDir);
   const setSettings = useStore((s) => s.setSettings);
@@ -608,7 +610,10 @@ function HelpSection() {
 function UpdatesSection() {
   const { t } = useT();
   const set = useStore((s) => s.set);
-  useEffect(() => set({ seenUpdates: LATEST_UPDATE }), [set]);
+  // A block, not `() => set(...)`: set returns its save to storage, and React would take that for a clean-up.
+  useEffect(() => {
+    set({ seenUpdates: LATEST_UPDATE });
+  }, [set]);
   return (
     <div className="updates">
       {UPDATES.map((u) => (

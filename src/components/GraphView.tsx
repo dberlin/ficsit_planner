@@ -756,13 +756,15 @@ export function GraphView({
   );
   // Uncontrolled flow remounted per layout: nodes stay draggable, and each new solve lays out fresh. The last floor
   // stays on screen while the next one is laid out, and a layout overtaken by a newer one is dropped.
-  const [take] = useState(() => latestOnly<Floor>());
+  const [take] = useState(() => latestOnly<Floor | undefined>());
   const [floor, setFloor] = useState<Floor & { key: number; sig: string }>();
   useEffect(() => {
     const box = document.querySelector('.floor-view')?.getBoundingClientRect();
     const opts = { dir: chosen, box: box && { width: box.width, height: box.height }, scale, text, spacing, placement, routing, effort };
-    take(
-      layoutGraph(built, opts, layoutInBackground).catch((err) => {
+    take((isStale) =>
+      layoutGraph(built, opts, layoutInBackground, isStale).catch((err) => {
+        // Dropped for a newer layout: nothing to show, the newer one will be.
+        if (isStale()) return undefined;
         console.error('Floor layout failed; showing a plain grid', err);
         return gridLayout(built, chosen ?? 'LR');
       }),

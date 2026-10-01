@@ -4,7 +4,7 @@ import loadHighs, { type Highs } from 'highs';
 import { data } from '../src/lib/data';
 import { testEngine } from './elkEngine';
 import { buildGraph, type FlowEdgeData, type Port } from '../src/lib/graph';
-import { type Floor, gridLayout, layoutGraph, routesOf } from '../src/lib/layout';
+import { type Engine, type Floor, gridLayout, layoutGraph, routesOf } from '../src/lib/layout';
 import { latestOnly } from '../src/lib/layoutClient';
 import { countCrossings, edgePath } from '../src/lib/routes';
 import { solve } from '../src/lib/solver';
@@ -155,8 +155,14 @@ test('the plain grid fallback keeps cards apart and gives every belt its handles
 test('latest wins: an older layout finishing late is dropped', async () => {
   const take = latestOnly<string>();
   let finishOld!: (v: string) => void;
-  const old = take(new Promise<string>((r) => (finishOld = r)));
-  const fresh = take(Promise.resolve('new'));
+  let oldStale: () => boolean = () => false;
+  const old = take((isStale) => {
+    oldStale = isStale;
+    return new Promise<string>((r) => (finishOld = r));
+  });
+  expect(oldStale()).toBe(false);
+  const fresh = take(() => Promise.resolve('new'));
+  expect(oldStale()).toBe(true);
   finishOld('old');
   expect(await fresh).toBe('new');
   expect(await old).toBeUndefined();
@@ -189,4 +195,18 @@ test('every belt label sits in the gap between the machines it joins, with room 
     expect(label.x - 88).toBeGreaterThanOrEqual(src.position.x + src.width!);
     expect(label.x + 88).toBeLessThanOrEqual(dst.position.x);
   }
+});
+
+test('a very big floor is laid out once per direction, whatever the effort', async () => {
+  const chain = Array.from({ length: 250 }, (_, i): Node => ({ id: `n${i}`, position: { x: 0, y: 0 }, width: 100, height: 60, data: {} }));
+  const links = chain
+    .slice(1)
+    .map((n, i): Edge => ({ id: `e${i}`, source: `n${i}`, target: n.id, sourceHandle: `e${i}:out`, targetHandle: `e${i}:in` }));
+  let runs = 0;
+  const counted: Engine = (g) => {
+    runs++;
+    return testEngine(g);
+  };
+  await layoutGraph({ nodes: chain, edges: links }, { dir: 'LR', effort: 'thorough' }, counted);
+  expect(runs).toBe(1);
 });

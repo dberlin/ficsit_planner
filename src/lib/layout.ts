@@ -4,8 +4,11 @@ import { type Direction, type FlowEdgeData, LABEL, type Port, type PowerEdgeData
 import { countCrossings, type EdgeRouting, type RoutedEdge } from './routes';
 import { EFFORT_SEEDS, type LayoutEffort, type LayoutPlacement } from './settings';
 
-/** Lays out one ELK graph: a worker from the pool, or ELK on this thread. */
-export type Engine = (graph: ElkNode) => Promise<ElkNode>;
+/**
+ * Lays out one ELK graph: a worker from the pool, or ELK on this thread. `isStale` says a newer layout replaced
+ * this one, so an engine with a queue can drop it rather than run it for nothing.
+ */
+export type Engine = (graph: ElkNode, isStale?: () => boolean) => Promise<ElkNode>;
 
 export interface LayoutOptions {
   /** Fixed direction; without it both are tried against the screen and the better fit wins. */
@@ -31,6 +34,9 @@ export interface Floor {
 }
 
 type Graph = { nodes: Node[]; edges: Edge[] };
+
+/** Past this many cards and belts together, one arrangement per direction: each takes seconds on a floor this big. */
+const BIG = 400;
 
 /** Gap between belts, and between a belt and a machine, before spacing and card size. */
 const BELT_GAP = 12;
@@ -133,17 +139,18 @@ export function routesOf(floor: Floor): RoutedEdge[] {
  * the fewest crossing belts wins (the lower seed on a tie); between directions, the one that shows the whole
  * factory bigger on this screen, unless it's only slightly better than the way the screen is shaped.
  */
-export async function layoutGraph(graph: Graph, opts: LayoutOptions, engine: Engine): Promise<Floor> {
+export async function layoutGraph(graph: Graph, opts: LayoutOptions, engine: Engine, isStale?: () => boolean): Promise<Floor> {
   const { dir, box } = opts;
   const natural: Direction = box && box.height > box.width ? 'TB' : 'LR';
   const dirs: Direction[] = dir ? [dir] : box ? ['LR', 'TB'] : ['LR'];
-  const seeds = Array.from({ length: EFFORT_SEEDS[opts.effort ?? 'balanced'] }, (_, i) => i + 1);
+  const tries = graph.nodes.length + graph.edges.length > BIG ? 1 : EFFORT_SEEDS[opts.effort ?? 'balanced'];
+  const seeds = Array.from({ length: tries }, (_, i) => i + 1);
   const routing = opts.routing ?? 'ORTHOGONAL';
   const best = await Promise.all(
     dirs.map(async (d) => {
       const runs = await Promise.all(
         seeds.map(async (seed) => {
-          const laid = await engine(toElk(graph, opts, d, seed));
+          const laid = await engine(toElk(graph, opts, d, seed), isStale);
           const floor = fromElk(graph, laid, d, routing);
           return { floor, width: laid.width ?? 0, height: laid.height ?? 0, crossings: countCrossings(routesOf(floor)) };
         }),

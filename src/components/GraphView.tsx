@@ -32,6 +32,7 @@ import {
   type Point,
   type PowerEdgeData,
   type PowerNodeData,
+  type Port,
   runExtra,
 } from '../lib/graph';
 import { useT } from '../lib/i18n';
@@ -62,6 +63,25 @@ export interface FactoryLinks {
 const Links = createContext<FactoryLinks | undefined>(undefined);
 const inSide = (dir: Direction) => (dir === 'TB' ? Position.Top : Position.Left);
 const outSide = (dir: Direction) => (dir === 'TB' ? Position.Bottom : Position.Right);
+
+/** A card's belt handles, one per port, where the layout put them. */
+function Ports({ data: d }: { data: Record<string, unknown> }) {
+  const dir = useContext(Flow);
+  const { ports } = d as { ports?: Port[] };
+  return (
+    <>
+      {ports?.map((p) => (
+        <Handle
+          key={p.id}
+          id={p.id}
+          type={p.type}
+          position={p.type === 'target' ? inSide(dir) : outSide(dir)}
+          style={dir === 'LR' ? { top: p.offset } : { left: p.offset }}
+        />
+      ))}
+    </>
+  );
+}
 
 /** Extractor counts per raw resource, shown on the ore/fluid source nodes. */
 const Extraction = createContext<Map<string, ExtractionUse>>(new Map());
@@ -136,7 +156,6 @@ function GroupTag({ group }: { group: MachineNodeData['group'] }) {
 function GeneratorNode({ id, data: d, selected }: NodeProps) {
   const { name, num } = useT();
   const { use, generation = 0, group } = d as MachineNodeData;
-  const dir = useContext(Flow);
   const faded = useFaded(id);
   const gen = generatorById.get(use.recipe.machine);
   const fuel = use.recipe.inputs.find((i) => data.items[i.item]?.energy)?.item;
@@ -145,7 +164,7 @@ function GeneratorNode({ id, data: d, selected }: NodeProps) {
       className={`machine-node power gen-${gen?.kind ?? 'fuel'} ${faded ? 'faded' : ''} ${selected ? 'selected' : ''}`}
       style={{ ['--run-extra' as string]: runExtra(use), ...(use.shards > 0 ? { ['--mod-bar' as string]: 'var(--shard)' } : {}) }}
     >
-      <Handle type="target" position={inSide(dir)} />
+      <Ports data={d} />
       <div className="machine-strip">
         <Icon id={fuel ?? use.recipe.machine} size={30} className="strip-icon" />
         <span className="machine-product">{fuel ? name(data.items[fuel]) : name(gen)}</span>
@@ -168,7 +187,6 @@ function GeneratorNode({ id, data: d, selected }: NodeProps) {
           )}
         </span>
       </div>
-      <Handle type="source" position={outSide(dir)} />
     </div>
   );
 }
@@ -177,7 +195,6 @@ function MachineNode(props: NodeProps) {
   const { id, data: d, selected } = props;
   const { name, num } = useT();
   const { use, group } = d as MachineNodeData;
-  const dir = useContext(Flow);
   const { recipe } = use;
   const faded = useFaded(id);
   if (recipe.kind === 'power') return <GeneratorNode {...props} />;
@@ -187,7 +204,7 @@ function MachineNode(props: NodeProps) {
       className={`machine-node ${recipe.kind} ${faded ? 'faded' : ''} ${selected ? 'selected' : ''}`}
       style={{ ['--run-extra' as string]: runExtra(use), ...(bar ? { ['--mod-bar' as string]: bar } : {}) }}
     >
-      <Handle type="target" position={inSide(dir)} />
+      <Ports data={d} />
       {/* The in-game build menu look: a coloured strip naming what it makes, the building and its draw below. */}
       <div className="machine-strip">
         <Icon id={recipe.outputs[0].item} size={30} className="strip-icon" />
@@ -212,7 +229,6 @@ function MachineNode(props: NodeProps) {
           </span>
         </span>
       </div>
-      <Handle type="source" position={outSide(dir)} />
     </div>
   );
 }
@@ -277,7 +293,6 @@ function EndpointNode({ id, data: d }: NodeProps) {
   const { kind, item, rate } = d as EndpointNodeData;
   const faded = useFaded(id);
   const ex = useContext(Extraction).get(item);
-  const dir = useContext(Flow);
   const links = useContext(Links);
   const sent = kind === 'target' ? links?.to.get(item) : undefined;
   const source = kind === 'supply' ? links?.from.get(item) : undefined;
@@ -288,13 +303,12 @@ function EndpointNode({ id, data: d }: NodeProps) {
       ? t('fromFactoryLabel', { name: source })
       : { raw: t('rawInput'), supply: t('onHand'), missing: t('bringIn'), target: t('output'), surplus: t('surplus') }[kind];
   const it = data.items[item];
-  const feeds = kind === 'raw' || kind === 'supply' || kind === 'missing';
   return (
     <div
       className={`endpoint-node ${kind} ${faded ? 'faded' : ''}`}
       style={it.form !== 'solid' ? { ['--fluid-color' as string]: it.color ?? 'var(--fluid)' } : undefined}
     >
-      {!feeds && <Handle type="target" position={inSide(dir)} />}
+      <Ports data={d} />
       <Slot id={item} size={60} tone={kind === 'target' ? 'target' : 'default'} />
       <span className="endpoint-text">
         <span className="endpoint-kind">{label}</span>
@@ -326,7 +340,6 @@ function EndpointNode({ id, data: d }: NodeProps) {
           )}
         </span>
       </span>
-      {feeds && <Handle type="source" position={outSide(dir)} />}
     </div>
   );
 }
@@ -335,14 +348,12 @@ function EndpointNode({ id, data: d }: NodeProps) {
 function PowerNode({ id, data: d }: NodeProps) {
   const { t, num } = useT();
   const { kind, label, mw, tone, boost, balance = 0 } = d as PowerNodeData;
-  const dir = useContext(Flow);
   const faded = useFaded(id);
-  const hasOut = useFlowStore((s) => s.edges.some((e) => e.source === id));
   if (kind === 'grid') {
     const short = balance < -0.5;
     return (
       <div className={`power-node grid ${short ? 'short' : ''} ${faded ? 'faded' : ''}`}>
-        <Handle type="target" position={inSide(dir)} />
+        <Ports data={d} />
         <span className="grid-head">
           <Glyph name="bolt" size={18} />
           {t('powerGrid')}
@@ -355,13 +366,12 @@ function PowerNode({ id, data: d }: NodeProps) {
           <span className={short ? 'bad' : 'good'}>{short ? t('shortBy', { mw: num(-balance) }) : t('spareBy', { mw: num(balance) })}</span>
           {!!boost && <span className="grid-boost">{t('boostTag', { boost: num(boost * 100) })}</span>}
         </span>
-        {hasOut && <Handle type="source" position={outSide(dir)} />}
       </div>
     );
   }
   return (
     <div className={`power-node consumer ${tone ?? ''} ${faded ? 'faded' : ''}`}>
-      <Handle type="target" position={inSide(dir)} />
+      <Ports data={d} />
       <Glyph name={tone === 'chain' || tone === 'out' ? 'bolt' : tone === 'other' ? 'sliders' : 'factory'} size={26} />
       <span className="consumer-text">
         <span className="consumer-kind">

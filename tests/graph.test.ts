@@ -9,7 +9,7 @@ beforeAll(async () => {
   highs = await loadHighs();
 });
 
-test('every node declares a left input and a right output, so belts never enter from the top', () => {
+test('every belt has its own handle at each end: outputs on the right, inputs on the left', () => {
   const r = solve(highs, {
     targets: [
       { item: 'Desc_ModularFrame_C', rate: 30 },
@@ -23,13 +23,21 @@ test('every node declares a left input and a right output, so belts never enter 
   const { nodes, edges } = buildGraph(r, 9);
   const byId = new Map(nodes.map((n) => [n.id, n]));
   for (const e of edges) {
-    const src = byId.get(e.source)!.handles!.find((h) => h.type === 'source');
-    const dst = byId.get(e.target)!.handles!.find((h) => h.type === 'target');
+    expect(e.sourceHandle).toBe(`${e.id}:out`);
+    expect(e.targetHandle).toBe(`${e.id}:in`);
+    const src = byId.get(e.source)!.handles!.find((h) => h.id === e.sourceHandle);
+    const dst = byId.get(e.target)!.handles!.find((h) => h.id === e.targetHandle);
+    expect(src?.type).toBe('source');
     expect(src?.position).toBe('right');
+    expect(dst?.type).toBe('target');
     expect(dst?.position).toBe('left');
-    expect(dst!.x).toBeLessThan(0);
   }
-  expect(nodes.some((n) => n.id === 'target:Desc_ModularFrame_C')).toBe(true);
+  // One handle per belt end, no spares.
+  const ends = edges.length * 2;
+  expect(nodes.reduce((s, n) => s + n.handles!.length, 0)).toBe(ends);
+  // Handles stay on the card, spread along its side.
+  for (const n of nodes) for (const h of n.handles!) expect(h.y + h.height / 2).toBeGreaterThan(0);
+  for (const n of nodes) for (const h of n.handles!) expect(h.y + h.height / 2).toBeLessThan(n.height!);
 });
 
 test('top to bottom: inputs on top, outputs below', () => {

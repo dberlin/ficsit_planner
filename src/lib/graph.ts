@@ -1,5 +1,5 @@
 import dagre from '@dagrejs/dagre';
-import { Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
+import { Position, type Edge, type Node } from '@xyflow/react';
 import { groupClocks } from './clocks';
 import { data, transportFor, type Transport } from './data';
 import { plantIdOf } from './power';
@@ -18,6 +18,8 @@ export interface MachineNodeData extends Record<string, unknown> {
   generation?: number;
   /** One of the groups a line was split into so each belt and pipe fits: group n of `of`. */
   group?: { n: number; of: number };
+  /** One per belt end, placed by the layout. */
+  ports?: Port[];
 }
 
 /** Who draws from the grid: a factory, the fuel chain itself, what the player typed in, or the output sent on. */
@@ -37,6 +39,8 @@ export interface PowerNodeData extends Record<string, unknown> {
   boost?: number;
   /** Grid: generation minus everything drawn; negative when the grid is short. */
   balance?: number;
+  /** One per belt end, placed by the layout. */
+  ports?: Port[];
 }
 
 /** A power line: generator to grid, grid to what it feeds. */
@@ -49,6 +53,8 @@ export interface EndpointNodeData extends Record<string, unknown> {
   kind: EndpointKind;
   item: string;
   rate: number;
+  /** One per belt end, placed by the layout. */
+  ports?: Port[];
 }
 
 /** The belt's path from the layout: around machines, through a spot kept free for its label. */
@@ -70,26 +76,71 @@ export interface FlowEdgeData extends Record<string, unknown> {
   route?: Route;
 }
 
-const HANDLE = { width: 10, height: 18 };
+/** Where one belt meets a card: its own handle, `offset` along the side (from the top, or the left top to bottom). */
+export interface Port {
+  id: string;
+  type: 'source' | 'target';
+  offset: number;
+}
+
+/** Handle ids for a belt's two ends. */
+const ends = (id: string) => ({ sourceHandle: `${id}:out`, targetHandle: `${id}:in` });
+
+const HANDLE = { width: 8, height: 12 };
 
 /**
- * Handle positions spelled out up front. Without them React Flow assumes top/bottom handles for any
- * node it hasn't measured yet, and a belt can end up entering the output from above.
+ * The node's handles from its ports: inputs on the inflow side, outputs on the outflow side. Spelled out up front,
+ * since without them React Flow assumes top/bottom handles for any node it hasn't measured yet.
  */
-function handlesFor(size: { width: number; height: number }, sides: { target: boolean; source: boolean }, dir: Direction): NodeHandle[] {
-  const list: NodeHandle[] = [];
-  if (dir === 'TB') {
-    // Same handle turned on its side.
-    const x = size.width / 2 - HANDLE.height / 2;
-    const flat = { width: HANDLE.height, height: HANDLE.width };
-    if (sides.target) list.push({ type: 'target', position: Position.Top, x, y: -flat.height / 2, ...flat });
-    if (sides.source) list.push({ type: 'source', position: Position.Bottom, x, y: size.height - flat.height / 2, ...flat });
-    return list;
+export function setPorts(node: Node, ports: Port[], dir: Direction): void {
+  const width = node.width ?? 0;
+  const height = node.height ?? 0;
+  node.data = { ...node.data, ports };
+  node.handles = ports.map((p) => {
+    const input = p.type === 'target';
+    if (dir === 'TB') {
+      // Same handle turned on its side.
+      const flat = { width: HANDLE.height, height: HANDLE.width };
+      return {
+        id: p.id,
+        type: p.type,
+        position: input ? Position.Top : Position.Bottom,
+        x: p.offset - flat.width / 2,
+        y: input ? -flat.height / 2 : height - flat.height / 2,
+        ...flat,
+      };
+    }
+    return {
+      id: p.id,
+      type: p.type,
+      position: input ? Position.Left : Position.Right,
+      x: input ? -HANDLE.width / 2 : width - HANDLE.width / 2,
+      y: p.offset - HANDLE.height / 2,
+      ...HANDLE,
+    };
+  });
+}
+
+/** Ports spread evenly along each side in belt order, where nothing has placed them yet. */
+export function spreadPorts(nodes: Node[], edges: Edge[], dir: Direction): void {
+  for (const n of nodes) {
+    const side = dir === 'LR' ? (n.height ?? 0) : (n.width ?? 0);
+    const spread = (ids: string[], type: Port['type']) => ids.map((id, i) => ({ id, type, offset: (side * (i + 1)) / (ids.length + 1) }));
+    setPorts(
+      n,
+      [
+        ...spread(
+          edges.filter((e) => e.target === n.id).map((e) => e.targetHandle!),
+          'target',
+        ),
+        ...spread(
+          edges.filter((e) => e.source === n.id).map((e) => e.sourceHandle!),
+          'source',
+        ),
+      ],
+      dir,
+    );
   }
-  const y = size.height / 2 - HANDLE.height / 2;
-  if (sides.target) list.push({ type: 'target', position: Position.Left, x: -HANDLE.width / 2, y, ...HANDLE });
-  if (sides.source) list.push({ type: 'source', position: Position.Right, x: size.width - HANDLE.width / 2, y, ...HANDLE });
-  return list;
 }
 
 export const SIZE = {
@@ -198,7 +249,6 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
   const k = opts.scale ?? 1;
   const box = (size: Box) => cardBox(size, k, opts.text ?? 1);
   const nodes: Node[] = [];
-  const sides = new Map<string, { source: boolean; target: boolean }>();
   const producers = new Map<string, { node: string; rate: number }[]>();
   const consumers = new Map<string, { node: string; rate: number }[]>();
   const push = (m: typeof producers, item: string, node: string, rate: number) => {
@@ -210,7 +260,6 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
 
   const endpoint = (kind: EndpointKind, item: string, rate: number) => {
     const id = `${kind}:${item}`;
-    const source = kind === 'raw' || kind === 'supply' || kind === 'missing';
     nodes.push({
       id,
       type: 'endpoint',
@@ -219,7 +268,6 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
       ...box(SIZE.endpoint),
       handles: [],
     });
-    sides.set(id, { source, target: !source });
     return id;
   };
 
@@ -249,7 +297,6 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
         ...box({ ...SIZE.machine, height: SIZE.machine.height + RUN_LINE * runExtra(g) }),
         handles: [],
       });
-      sides.set(id, { source: true, target: true });
       if (mw !== undefined) plants.push({ id, mw });
       for (const o of g.outputs) push(producers, o.item, id, o.rate);
       for (const x of g.inputs) push(consumers, x.item, id, x.rate);
@@ -272,10 +319,12 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
       if (flow > 1e-4 && p[i].node !== c[j].node) {
         const it = data.items[item];
         const { transport, lanes } = transportFor(it, flow, tier);
+        const id = `${p[i].node}>${c[j].node}>${item}`;
         edges.push({
-          id: `${p[i].node}>${c[j].node}>${item}`,
+          id,
           source: p[i].node,
           target: c[j].node,
+          ...ends(id),
           type: 'flow',
           data: { item, rate: flow, transport, lanes } satisfies FlowEdgeData,
         });
@@ -287,10 +336,10 @@ export function buildGraph(result: SolveResult, tier: number, opts: GraphOptions
     }
   }
 
-  if (result.grid) addGrid(result, plants, nodes, edges, sides, opts.consumers ?? [], box);
+  if (result.grid) addGrid(result, plants, nodes, edges, opts.consumers ?? [], box);
 
   const dir = layout(nodes, edges, opts);
-  for (const n of nodes) n.handles = handlesFor({ width: n.width!, height: n.height! }, sides.get(n.id)!, dir);
+  spreadPorts(nodes, edges, dir);
   return { nodes, edges, dir };
 }
 
@@ -303,7 +352,6 @@ function addGrid(
   plants: { id: string; mw: number }[],
   nodes: Node[],
   edges: Edge[],
-  sides: Map<string, { source: boolean; target: boolean }>,
   consumers: Consumer[],
   box: (size: Box) => Box,
 ) {
@@ -317,9 +365,15 @@ function addGrid(
     ...box(SIZE.grid),
     handles: [],
   });
-  sides.set('grid', { source: consumers.length > 0, target: true });
   for (const { id, mw } of plants) {
-    edges.push({ id: `${id}>grid`, source: id, target: 'grid', type: 'power', data: { mw } satisfies PowerEdgeData });
+    edges.push({
+      id: `${id}>grid`,
+      source: id,
+      target: 'grid',
+      ...ends(`${id}>grid`),
+      type: 'power',
+      data: { mw } satisfies PowerEdgeData,
+    });
   }
   for (const c of consumers) {
     const id = `use:${c.id}`;
@@ -331,8 +385,14 @@ function addGrid(
       ...box(SIZE.consumer),
       handles: [],
     });
-    sides.set(id, { source: false, target: true });
-    edges.push({ id: `grid>${id}`, source: 'grid', target: id, type: 'power', data: { mw: c.mw } satisfies PowerEdgeData });
+    edges.push({
+      id: `grid>${id}`,
+      source: 'grid',
+      target: id,
+      ...ends(`grid>${id}`),
+      type: 'power',
+      data: { mw: c.mw } satisfies PowerEdgeData,
+    });
   }
 }
 

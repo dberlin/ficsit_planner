@@ -210,8 +210,10 @@ function machineClocks(built: number, units: number): number[] {
 
 /**
  * Splits a line's placed machines into groups (consecutive runs of `sizes` machines), each described as a
- * line of its own. Sloops go into the first machines, as placedPower puts them, so a group's outputs are
- * what its own machines make; flows are shares of the line's, so the groups always add up to it.
+ * line of its own. Sloops go into the first machines, as placedPower puts them. Inputs are shared by clock and
+ * outputs by what each group's machines make with their sloops, as shares of the line's own flows, so the groups
+ * always add up to it; where the line's average sloops differ from the whole sloops placed, a group's outputs are
+ * that share rather than exactly what its machines would make.
  */
 export function splitUse(u: RecipeUse, sizes: number[]): RecipeUse[] {
   const slots = sloopSlots(u.recipe);

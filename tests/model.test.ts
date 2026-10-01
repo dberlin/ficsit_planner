@@ -13,6 +13,7 @@ import { addNode, canConnect, connect, removeNodes } from '../src/lib/model/ops'
 import { cleanModel } from '../src/lib/model/sanitize';
 import { type MLink, type MNode, type Model, MODEL_VERSION } from '../src/lib/model/types';
 import { solve } from '../src/lib/solver';
+import { testEngine } from './elkEngine';
 
 let highs: Highs;
 beforeAll(async () => {
@@ -139,7 +140,7 @@ describe('from an Auto plan', () => {
     ['Desc_ComputerSuper_C', 10],
     ['Desc_MotorLightweight_C', 5],
   ] as const) {
-    test(`${item}: the hand-built copy makes what the plan makes from what it mines`, () => {
+    test(`${item}: the hand-built copy makes what the plan makes from what it mines`, async () => {
       const auto = solve(highs, {
         targets: [{ item, rate }],
         supplies: [],
@@ -147,7 +148,7 @@ describe('from an Auto plan', () => {
         resourceCaps: {},
         objective: 'resources',
       });
-      const m = modelFromSolve(auto, 9, DEFAULT_EXTRACTION);
+      const m = await modelFromSolve(auto, 9, DEFAULT_EXTRACTION, testEngine);
       expect(cleanModel(m)).toEqual(m);
       const r = run(m);
       const { result } = adaptModel(m, r);
@@ -389,7 +390,7 @@ describe('tidy up', () => {
     ['Desc_MotorLightweight_C', 2],
     ['Desc_SpaceElevatorPart_9_C', 2],
   ] as const)
-    test(`${item}: no card on another, every belt routed, left to right`, () => {
+    test(`${item}: no card on another, every belt routed, left to right`, async () => {
       const auto = solve(highs, {
         targets: [{ item, rate }],
         supplies: [],
@@ -397,7 +398,7 @@ describe('tidy up', () => {
         resourceCaps: {},
         objective: 'resources',
       });
-      const m = modelFromSolve(auto, 9, DEFAULT_EXTRACTION);
+      const m = await modelFromSolve(auto, 9, DEFAULT_EXTRACTION, testEngine);
       const box = (n: MNode) => ({ ...cardSize(n), x: n.x, y: n.y });
       for (let i = 0; i < m.nodes.length; i++)
         for (let j = i + 1; j < m.nodes.length; j++) {
@@ -411,8 +412,8 @@ describe('tidy up', () => {
       const back = m.links.filter((l) => at.get(l.a)!.x >= at.get(l.b)!.x);
       expect(back.length).toBeLessThanOrEqual(Math.ceil(m.links.length * 0.05));
       // Tidying again changes nothing; a moved card goes back.
-      expect(arrangeModel(m)).toEqual(m);
+      expect(await arrangeModel(m, testEngine)).toEqual(m);
       const moved = { ...m, nodes: m.nodes.map((n, i) => (i === 0 ? { ...n, x: n.x + 999 } : n)) };
-      expect(arrangeModel(moved).nodes).toEqual(m.nodes);
+      expect((await arrangeModel(moved, testEngine)).nodes).toEqual(m.nodes);
     });
 });

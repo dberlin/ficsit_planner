@@ -13,7 +13,7 @@ import { PowerPanel } from './components/PowerPanel';
 import { InstallButton, ClosedTab, Notice, PwaStatus } from './components/PwaStatus';
 import { useFactoryHost, useModelCalc } from './components/modeler/hosts';
 import { forgetCamera, ModelEditor } from './components/modeler/ModelEditor';
-import { arrangeModel } from './lib/model/arrange';
+import { applyArrangement, arrangement } from './lib/model/arrange';
 import { ModelInspector } from './components/modeler/ModelInspector';
 import { ModelToolbar } from './components/modeler/Toolbar';
 import { QuickPick } from './components/QuickPick';
@@ -124,9 +124,22 @@ export default function App() {
   /** Auto or Manual: the first switch to Manual starts from the factory as worked out, or an empty floor. */
   // A model built afresh opens with a fresh camera.
   const [built, setBuilt] = useState(0);
-  const setFloor = (floor: 'auto' | 'manual') => {
+  // Laying a hand-built floor out runs in the background; the floor says so meanwhile, and waits for it.
+  const [arranging, setArranging] = useState(false);
+  const whileArranging = async <T,>(work: Promise<T>): Promise<T> => {
+    setArranging(true);
+    try {
+      return await work;
+    } finally {
+      setArranging(false);
+    }
+  };
+  const setFloor = async (floor: 'auto' | 'manual') => {
     if (floor === 'auto' || plan.model) return s.setFloor(plan.id, floor);
-    const model = factory.result ? modelFromSolve(factory.result, s.tier, effectiveExtraction(plan.extraction, s.tier)) : emptyModel();
+    if (arranging) return;
+    const model = factory.result
+      ? await whileArranging(modelFromSolve(factory.result, s.tier, effectiveExtraction(plan.extraction, s.tier)))
+      : emptyModel();
     forgetCamera(plan.id);
     setBuilt((n) => n + 1);
     s.setFloor(plan.id, 'manual', model);
@@ -135,9 +148,10 @@ export default function App() {
     if (!factoryIn || !window.confirm(t('rebuildConfirm'))) return;
     try {
       const r = await solveAsync(factoryIn);
+      const model = await whileArranging(modelFromSolve(r, s.tier, effectiveExtraction(plan.extraction, s.tier)));
       forgetCamera(plan.id);
       setBuilt((n) => n + 1);
-      s.setFloor(plan.id, 'manual', modelFromSolve(r, s.tier, effectiveExtraction(plan.extraction, s.tier)));
+      s.setFloor(plan.id, 'manual', model);
     } catch {
       /* the Auto floor shows why it can't be solved */
     }
@@ -385,8 +399,11 @@ export default function App() {
                   <ModelEditor key={built} host={host} calc={hand.calc} />
                   <ModelToolbar
                     host={host}
-                    onTidy={() => {
-                      host.edit(arrangeModel);
+                    onTidy={async () => {
+                      if (arranging) return;
+                      const laid = await whileArranging(arrangement(host.model));
+                      // Onto the model as it is by then, so anything changed meanwhile stays; undo puts it back.
+                      host.edit((m) => applyArrangement(m, laid));
                       forgetCamera(plan.id);
                       setBuilt((n) => n + 1);
                     }}
@@ -406,6 +423,7 @@ export default function App() {
                 <Inspector result={result} />
               ))}
             {busy && <div className="busy">{t('solving')}</div>}
+            {arranging && <div className="busy laying-out">{t('layingOut')}</div>}
             {shown && (
               <div className="floor-bar">
                 {!powerMode && (

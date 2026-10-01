@@ -3,6 +3,7 @@ import { data, transportFor } from '../data';
 import { type ExtractionSettings, extractorFor } from '../extraction';
 import { buildGraph, type EndpointNodeData, type FlowEdgeData, type MachineNodeData } from '../graph';
 import type { SolveResult } from '../solver';
+import type { Engine } from '../layout';
 import { arrangeModel } from './arrange';
 import { extractorRate, mediumOf } from './ports';
 import { type MLink, type MNode, type Model, MODEL_VERSION } from './types';
@@ -31,8 +32,8 @@ const line = (item: string, rate: number, tier: number): { mk: number; lanes?: n
   };
 };
 
-export function modelFromSolve(result: SolveResult, tier: number, extraction: ExtractionSettings): Model {
-  const g = buildGraph(result, tier, { dir: 'LR', splitLines: 'each' });
+export function modelFromSolve(result: SolveResult, tier: number, extraction: ExtractionSettings, engine?: Engine): Promise<Model> {
+  const g = buildGraph(result, tier, { splitLines: 'each' });
   let seq = 1;
   const id = () => (seq++).toString(36);
   const nodes: MNode[] = [];
@@ -183,5 +184,5 @@ export function modelFromSolve(result: SolveResult, tier: number, extraction: Ex
     if (!src || !dst) continue;
     links.push({ id: id(), a: src.node, ap: src.port, b: dst.node, bp: dst.port, ...line(item, rate, tier) });
   }
-  return arrangeModel({ v: MODEL_VERSION, calc: 'basic', nodes, links, seq });
+  return arrangeModel({ v: MODEL_VERSION, calc: 'basic', nodes, links, seq }, engine);
 }

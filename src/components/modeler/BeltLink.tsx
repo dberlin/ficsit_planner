@@ -12,9 +12,9 @@ import { useT } from '../../lib/i18n';
 import type { LinkCalc } from '../../lib/model/calc/result';
 import type { Transport } from '../../lib/data';
 import type { MLink } from '../../lib/model/types';
+import { routeSvgPath } from '../../lib/routes';
 import { useStore } from '../../store';
 import { beltStroke } from '../floor/BeltStroke';
-import { routePath } from '../GraphView';
 import { Icon } from '../Icon';
 
 export interface BeltData extends Record<string, unknown> {
@@ -53,9 +53,15 @@ export function BeltLink({ sourceX, sourceY, targetX, targetY, sourcePosition, t
         ? getSmoothStepPath({ ...geo, borderRadius: 16 })
         : getBezierPath(geo);
   if (link.pts?.length) {
-    // Through its bends, like the Auto floor's belts, with the label on the middle one.
+    // Through its bends at right angles, like the Auto floor's belts, with the label on the middle one.
     const pts = link.pts.map(([x, y]) => ({ x, y }));
-    path = routePath([{ x: sourceX, y: sourceY }, ...pts, { x: targetX, y: targetY }], 'LR');
+    // The laid-out belt leaves and arrives level with its ends; drawn cards can sit a little off the sizes the layout
+    // used, so the first and last bends follow the handles and every run stays straight.
+    if (pts.length >= 2) {
+      pts[0].y = sourceY;
+      pts[pts.length - 1].y = targetY;
+    }
+    path = routeSvgPath([{ x: sourceX, y: sourceY }, ...pts, { x: targetX, y: targetY }], 'ORTHOGONAL');
     ({ x: lx, y: ly } = pts[Math.floor(pts.length / 2)]);
   }
   const state = `${selected ? 'lit' : ''} ${still ? 'still' : ''} ${calc && calc.rate < 1e-6 ? 'stopped' : ''}`;

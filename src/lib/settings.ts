@@ -35,6 +35,10 @@ export interface Settings {
   addWith: 'right' | 'double';
   /** Belts coloured by tier, or all in one colour. */
   beltColors: 'tier' | 'one';
+  /** Split machine lines so each belt between them fits this belt (its building id), or 'off'. */
+  beltSplit: string;
+  /** The same for fluids and pipes. */
+  pipeSplit: string;
   colors: Colors;
   /** Most decimals shown on rates and power. */
   decimals: number;
@@ -94,6 +98,8 @@ export const DEFAULT_SETTINGS: Settings = {
   gridLines: true,
   addWith: 'right',
   beltColors: 'tier',
+  beltSplit: 'off',
+  pipeSplit: 'off',
   colors: DEFAULT_COLORS,
   decimals: 2,
   motion: 'system',

@@ -4,6 +4,8 @@ import { groupClocks } from './clocks';
 import { data, transportFor, type Transport } from './data';
 import { plantIdOf } from './power';
 import { splitUse, type RecipeUse, type SolveResult } from './solver';
+import type { Point } from './routes';
+export type { Point } from './routes';
 
 /** Left to right or top to bottom. The layout picks whichever fits the screen, unless the player chose. */
 export type Direction = 'LR' | 'TB';
@@ -47,11 +49,6 @@ export interface EndpointNodeData extends Record<string, unknown> {
   kind: EndpointKind;
   item: string;
   rate: number;
-}
-
-export interface Point {
-  x: number;
-  y: number;
 }
 
 /** The belt's path from the layout: around machines, through a spot kept free for its label. */

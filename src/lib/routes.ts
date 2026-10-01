@@ -1,0 +1,79 @@
+/** A spot on the floor, in floor pixels. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** How belts run between machines: right angles, curves, or straight lines. */
+export type EdgeRouting = 'ORTHOGONAL' | 'SPLINES' | 'POLYLINE';
+
+/** Corner radius on right-angle belts. */
+const CORNER = 12;
+
+const xy = (p: Point) => `${p.x},${p.y}`;
+
+/** Straight runs, with each bend rounded off by up to `radius` (never more than half either run). */
+function rounded(points: Point[], radius: number): string {
+  let d = `M${xy(points[0])}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [a, p, b] = [points[i - 1], points[i], points[i + 1]];
+    const la = Math.hypot(p.x - a.x, p.y - a.y);
+    const lb = Math.hypot(b.x - p.x, b.y - p.y);
+    const r = Math.min(radius, la / 2, lb / 2);
+    if (r < 0.5) {
+      d += ` L${xy(p)}`;
+      continue;
+    }
+    const p1 = { x: p.x + ((a.x - p.x) * r) / la, y: p.y + ((a.y - p.y) * r) / la };
+    const p2 = { x: p.x + ((b.x - p.x) * r) / lb, y: p.y + ((b.y - p.y) * r) / lb };
+    d += ` L${xy(p1)} Q${xy(p)} ${xy(p2)}`;
+  }
+  return `${d} L${xy(points.at(-1)!)}`;
+}
+
+/**
+ * The SVG path of a belt along its route, start and end included. For curves, ELK's points after the start
+ * are the control points of a chain of cubic Béziers, in (control, control, end) threes.
+ */
+export function routeSvgPath(points: Point[], routing: EdgeRouting): string {
+  if (routing === 'SPLINES' && points.length > 1 && (points.length - 1) % 3 === 0) {
+    let d = `M${xy(points[0])}`;
+    for (let i = 1; i < points.length; i += 3) d += ` C${xy(points[i])} ${xy(points[i + 1])} ${xy(points[i + 2])}`;
+    return d;
+  }
+  return rounded(points, routing === 'ORTHOGONAL' ? CORNER : 0);
+}
+
+/** A belt as laid out: the machines at its ends and the points it runs through. */
+export interface RoutedEdge {
+  source: string;
+  target: string;
+  points: Point[];
+}
+
+/** Do two segments cross somewhere other than their ends? */
+function crosses(p1: Point, p2: Point, p3: Point, p4: Point): boolean {
+  const d = (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
+  if (Math.abs(d) < 1e-9) return false;
+  const ua = ((p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x)) / d;
+  const ub = ((p2.x - p1.x) * (p1.y - p3.y) - (p2.y - p1.y) * (p1.x - p3.x)) / d;
+  return ua > 1e-6 && ua < 1 - 1e-6 && ub > 1e-6 && ub < 1 - 1e-6;
+}
+
+/**
+ * Places where two belts cross, each route taken as the lines through its points (for curves, the control
+ * polygon). Belts sharing a machine at either end don't count against each other: they meet there anyway.
+ */
+export function countCrossings(routes: RoutedEdge[]): number {
+  let n = 0;
+  for (let i = 0; i < routes.length; i++) {
+    for (let j = i + 1; j < routes.length; j++) {
+      const a = routes[i];
+      const b = routes[j];
+      if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+      for (let s = 1; s < a.points.length; s++)
+        for (let t = 1; t < b.points.length; t++) if (crosses(a.points[s - 1], a.points[s], b.points[t - 1], b.points[t])) n++;
+    }
+  }
+  return n;
+}

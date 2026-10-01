@@ -1,5 +1,19 @@
+import type { EdgeRouting } from './routes';
+export type { EdgeRouting } from './routes';
+
 /** Where the panel (targets, recipes, resources) sits around the factory floor. */
 export type PanelSide = 'top' | 'left' | 'right';
+
+/** How ELK lines machines up within each column: network simplex keeps belts straightest. */
+export type LayoutPlacement = 'NETWORK_SIMPLEX' | 'BRANDES_KOEPF' | 'LINEAR_SEGMENTS' | 'SIMPLE';
+/** How hard the layout tries for fewer crossing belts. */
+export type LayoutEffort = 'fast' | 'balanced' | 'thorough';
+
+export const PLACEMENTS: LayoutPlacement[] = ['NETWORK_SIMPLEX', 'BRANDES_KOEPF', 'LINEAR_SEGMENTS', 'SIMPLE'];
+export const ROUTINGS: EdgeRouting[] = ['ORTHOGONAL', 'SPLINES', 'POLYLINE'];
+export const EFFORTS: LayoutEffort[] = ['fast', 'balanced', 'thorough'];
+/** Arrangements tried per direction at each effort; the one with the fewest crossing belts wins. */
+export const EFFORT_SEEDS: Record<LayoutEffort, number> = { fast: 1, balanced: 4, thorough: 8 };
 
 export interface Colors {
   /** FICSIT orange: buttons, selections, the current tab. */
@@ -32,6 +46,12 @@ export interface Settings {
   beltSplit: string;
   /** The same for fluids and pipes. */
   pipeSplit: string;
+  /** ELK's node placement within each column. */
+  layoutPlacement: LayoutPlacement;
+  /** Belts and pipes at right angles, as curves, or as straight lines. */
+  edgeRouting: EdgeRouting;
+  /** Fast, balanced or thorough search for fewer crossing belts. */
+  layoutEffort: LayoutEffort;
   colors: Colors;
   /** Most decimals shown on rates and power. */
   decimals: number;
@@ -81,6 +101,9 @@ export const DEFAULT_SETTINGS: Settings = {
   beltColors: 'tier',
   beltSplit: 'off',
   pipeSplit: 'off',
+  layoutPlacement: 'NETWORK_SIMPLEX',
+  edgeRouting: 'ORTHOGONAL',
+  layoutEffort: 'balanced',
   colors: DEFAULT_COLORS,
   decimals: 2,
   motion: 'system',

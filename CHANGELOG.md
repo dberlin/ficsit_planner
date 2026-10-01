@@ -2,6 +2,14 @@
 
 All notable changes to FICSIT Planner. Dates are when the version was finished.
 
+## Unreleased
+
+### Added
+
+- **Belt and pipe tiers on the floor:** Settings → Floor → Split for belts / Split for pipes splits each machine line
+  into groups whose belts and pipes all fit the chosen tier, each group with its own clocks, power, shards and
+  somersloops.
+
 ## 0.14.7 — 2026-11-15
 
 ### Added

@@ -27,6 +27,15 @@
   color: var(--ficsit-ink);
 }
 
+.segmented.wrap {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.segmented.wrap button {
+  padding: 6px 10px;
+}
+
 .text-button {
   border: 0;
   padding: 2px 0;

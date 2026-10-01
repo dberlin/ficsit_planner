@@ -59,10 +59,11 @@ import { Slot } from './Slot';
 import { SurplusMake } from './SurplusMake';
 import { SplitBadge, SplitTo } from './SplitText';
 
-type FocusValue = { node?: string; near: Set<string>; edge?: string };
+type FocusValue = { nodes?: Set<string>; near: Set<string>; edge?: string };
 /**
- * The hovered node and its direct neighbours; everything else fades so one line can be followed. It lives outside
- * React state so a hover redraws only the cards and belts whose look changes, not every one on the floor.
+ * The hovered node (or every card of the machine line being inspected) and their direct neighbours; everything else
+ * fades so one line can be followed. It lives outside React state so a hover redraws only the cards and belts whose
+ * look changes, not every one on the floor.
  */
 class FocusStore {
   value: FocusValue = { near: new Set() };
@@ -112,9 +113,10 @@ const useEdgeFocus = (id: string, source: string, target: string, power = false)
   const store = useContext(Focus);
   return useSyncExternalStore(store.subscribe, () => {
     const f = store.value;
-    if (power) return f.node !== undefined && (source === f.node || target === f.node) ? 'lit' : '';
+    const lit = f.nodes !== undefined && (f.nodes.has(source) || f.nodes.has(target)) ? 'lit' : '';
+    if (power) return lit;
     if (f.edge !== undefined) return f.edge === id ? 'picked' : '';
-    return f.node !== undefined && (source === f.node || target === f.node) ? 'lit' : '';
+    return lit;
   });
 };
 
@@ -181,10 +183,21 @@ function PortHandle({ type, lanes }: { type: 'source' | 'target'; lanes?: number
   return <Handle type={type} position={type === 'target' ? inSide(dir) : outSide(dir)} style={style} />;
 }
 
+/** Which of a split line's groups this card is: "2/3". */
+function GroupTag({ group }: { group: MachineNodeData['group'] }) {
+  const { t } = useT();
+  if (!group) return null;
+  return (
+    <span className="machine-group" title={t('machineGroup', { n: group.n, of: group.of })}>
+      {group.n}/{group.of}
+    </span>
+  );
+}
+
 /** A row of generators: the strip names the fuel and what they put on the grid, the building below. */
 function GeneratorNode({ id, data: d, selected }: NodeProps) {
   const { name, num } = useT();
-  const { use, generation = 0, ports } = d as MachineNodeData;
+  const { use, generation = 0, ports, group } = d as MachineNodeData;
   const near = useNear(id);
   const gen = generatorById.get(use.recipe.machine);
   const fuel = use.recipe.inputs.find((i) => data.items[i.item]?.energy)?.item;
@@ -197,6 +210,7 @@ function GeneratorNode({ id, data: d, selected }: NodeProps) {
       <div className="machine-strip">
         <Icon id={fuel ?? use.recipe.machine} size={30} className="strip-icon" />
         <span className="machine-product">{fuel ? name(data.items[fuel]) : name(gen)}</span>
+        <GroupTag group={group} />
         <span className="machine-power made">
           <Glyph name="bolt" size={15} />
           {num(generation)}
@@ -222,7 +236,7 @@ function GeneratorNode({ id, data: d, selected }: NodeProps) {
 function MachineNode(props: NodeProps) {
   const { id, data: d, selected } = props;
   const { name, num } = useT();
-  const { use, split, part, ports } = d as MachineNodeData;
+  const { use, split, part, ports, group } = d as MachineNodeData;
   const { recipe } = use;
   const near = useNear(id);
   const done = useContext(Built).built.has(recipe.id);
@@ -240,6 +254,7 @@ function MachineNode(props: NodeProps) {
         <span className="machine-product" title={recipeLabel(name(recipe), recipe.kind)}>
           {recipeLabel(name(recipe), recipe.kind)}
         </span>
+        <GroupTag group={group} />
       </div>
       <div className="machine-body">
         <Icon id={recipe.machine} size={60} className="machine-icon" />
@@ -867,8 +882,14 @@ export function openingViewport(nodes: Node[], width: number, height: number, di
   return { x, y, zoom };
 }
 
-/** Whether a node is the card (or the first of its cards, or its copy on a line of its own) of this recipe's machines. */
-const isCard = (nodeId: string, recipe: string) => nodeId.replace(/^L\d+:/, '').replace(/~\d+$/, '') === `recipe:${recipe}`;
+/**
+ * Whether a node is a card of this recipe's machines: its only card, one per destination, one of the groups split to
+ * fit the belts, or its copy on a line of its own.
+ */
+const isCard = (nodeId: string, recipe: string) => nodeId.replace(/^L\d+:/, '').replace(/(~\d+)?(#\d+)?$/, '') === `recipe:${recipe}`;
+
+/** Whether two sets of ids, either maybe missing, hold the same ids. */
+const same = (a?: Set<string>, b?: Set<string>) => a === b || (!!a && !!b && a.size === b.size && [...a].every((n) => b.has(n)));
 
 // Camera survives re-solves that keep the same machines (e.g. tweaking a clock speed).
 let camera: { sig: string; viewport?: Viewport } = { sig: '' };
@@ -901,12 +922,13 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
   const flow = useReactFlow();
   const { toggle } = useContext(Built);
   const opening = useRef<number>(undefined);
-  // Which card of a split line was clicked: the view and the lit-up belts follow that one, not the line's first card.
+  // Which card of a split line was clicked: the view follows that one, not the line's first card.
   const [clicked, setClicked] = useState<string>();
   useEffect(() => () => clearTimeout(opening.current), []);
   useEffect(() => {
     if (!inspect) return;
-    // A line drawn as a card per destination is found by its first card.
+    // A line drawn as more than one card is found by its first card: a long split line is often wider than the
+    // screen, and it starts there.
     const nodes = flow.getNodes();
     const node = nodes.find((n) => n.id === clicked && isCard(n.id, inspect)) ?? nodes.find((n) => isCard(n.id, inspect));
     if (!node) return;
@@ -934,15 +956,15 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
   }, [inspect, set]);
 
   // A machine that's gone from the plan (its recipe was just unticked) focuses nothing, so the floor doesn't dim.
-  const cards = inspect ? [...neighbours.keys()].filter((id) => isCard(id, inspect)) : [];
-  const inspected = cards.find((id) => id === clicked) ?? cards[0];
+  const inspected = inspect ? [...neighbours.keys()].filter((id) => isCard(id, inspect)) : [];
   // A clicked belt lights itself and the two machines it joins; otherwise the machine under the pointer, or the
-  // selected one, lights its belts and neighbours.
+  // selected one (every card of it), lights its belts and neighbours.
   const picked = edge ? edges.find((e) => e.id === edge) : undefined;
   const light = (): FocusValue => {
     if (picked) return { edge: picked.id, near: new Set([picked.source, picked.target]) };
-    const node = hoverRef.current ?? inspected;
-    return { node, near: (node && neighbours.get(node)) || new Set(node ? [node] : []) };
+    const ids = hoverRef.current ? [hoverRef.current] : inspected;
+    if (!ids.length) return { near: new Set() };
+    return { nodes: new Set(ids), near: new Set(ids.flatMap((id) => [...(neighbours.get(id) ?? [id])])) };
   };
   const lightRef = useRef(light);
   lightRef.current = light;
@@ -957,10 +979,10 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
   // classes on the floor, so a hover doesn't redraw every card and belt.
   const apply = useCallback(() => {
     const v = lightRef.current();
-    root.current?.classList.toggle('fade-nodes', v.node !== undefined);
-    root.current?.classList.toggle('fade-edges', v.node !== undefined || v.edge !== undefined);
+    root.current?.classList.toggle('fade-nodes', v.nodes !== undefined);
+    root.current?.classList.toggle('fade-edges', v.nodes !== undefined || v.edge !== undefined);
     const cur = focus.value;
-    if (v.node === cur.node && v.edge === cur.edge && v.near.size === cur.near.size && [...v.near].every((n) => cur.near.has(n))) return;
+    if (same(v.nodes, cur.nodes) && v.edge === cur.edge && same(v.near, cur.near)) return;
     focus.set(v);
   }, [focus]);
   useEffect(apply);
@@ -1069,6 +1091,8 @@ export function GraphView({
   const spacing = useStore((s) => s.settings.spacing);
   const squareBelts = useStore((s) => s.settings.autoBelts === 'square');
   const splitters = useStore((s) => s.settings.autoSplitters);
+  const beltSplit = useStore((s) => s.settings.beltSplit);
+  const pipeSplit = useStore((s) => s.settings.pipeSplit);
   // Uncontrolled flow remounted per solve: nodes stay draggable, and each new solve lays out fresh.
   const { nodes, edges, dir, key, sig } = useMemo(() => {
     const box = document.querySelector('.floor-view')?.getBoundingClientRect();
@@ -1082,6 +1106,10 @@ export function GraphView({
       splitLines,
       squareBelts,
       splitters,
+      split: {
+        belt: data.belts.find((b) => b.id === beltSplit)?.rate,
+        pipe: data.pipes.find((p) => p.id === pipeSplit)?.rate,
+      },
     });
     return {
       ...g,
@@ -1092,7 +1120,7 @@ export function GraphView({
           .sort()
           .join('|') + g.dir,
     };
-  }, [result, tier, chosen, scale, text, spacing, consumers, splitLines, squareBelts, splitters]);
+  }, [result, tier, chosen, scale, text, spacing, consumers, splitLines, squareBelts, splitters, beltSplit, pipeSplit]);
   const exMap = useMemo(() => new Map(extraction.map((u) => [u.item, u])), [extraction]);
   // Ticking a machine built changes nothing the layout is made from, so the floor isn't laid out again for it.
   const ticked = usePlan().built;

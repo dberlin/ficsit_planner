@@ -4,6 +4,7 @@ import { sinkPerMin } from './data';
 import { type PoolLine, type PoolParty, plantTakesFromPool, poolLines, poolParties, poolSources, takesFromPool } from './pool';
 import { effectiveExtraction, type ExtractionUse, planExtraction } from './extraction';
 import type { GameRules } from './game';
+import type { ClockSpread } from './settings';
 import { type FactoryDraw, type FactoryEntry, powerInput, powerLoad, useFactoryEntries } from './solution';
 import type { SolveResult, Target } from './solver';
 import { solveAsync } from './solverClient';
@@ -147,11 +148,19 @@ interface PlantEntry {
 // Plants solved for the page, by what went into them: an unchanged plant isn't solved again.
 const plantCache = new Map<string, PlantEntry>();
 
-function plantEntry(pp: PowerPlan, demand: number, tier: number, aim: ReturnType<typeof aimOf>, game: GameRules, land: () => void) {
-  const key = JSON.stringify([pp, demand, tier, aim, game]);
+function plantEntry(
+  pp: PowerPlan,
+  demand: number,
+  tier: number,
+  aim: ReturnType<typeof aimOf>,
+  game: GameRules,
+  clocks: ClockSpread,
+  land: () => void,
+) {
+  const key = JSON.stringify([pp, demand, tier, aim, game, clocks]);
   const hit = plantCache.get(key);
   if (hit) return hit;
-  const input = pp.sizeBy === 'have' && pp.have.length === 0 ? undefined : powerInput(pp, demand, tier, aim, game);
+  const input = pp.sizeBy === 'have' && pp.have.length === 0 ? undefined : powerInput(pp, demand, tier, aim, game, clocks);
   const entry: PlantEntry = { pending: !!input };
   plantCache.set(key, entry);
   if (plantCache.size > 60) plantCache.delete(plantCache.keys().next().value as string);
@@ -178,6 +187,7 @@ function usePlantRows(draws: FactoryDraw[], enabled = true): PlantRow[] {
   const tier = useStore((s) => s.tier);
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
+  const clocks = useStore((s) => s.settings.clockSpread);
   const [landed, bump] = useState(0);
   const alive = useRef(true);
   useEffect(() => {
@@ -192,7 +202,7 @@ function usePlantRows(draws: FactoryDraw[], enabled = true): PlantRow[] {
     () =>
       (enabled ? plants : []).map((pp): PlantRow => {
         const load = powerLoad(pp, draws);
-        const e = plantEntry(pp, load.demand, tier, aim, game, () => alive.current && bump((n) => n + 1));
+        const e = plantEntry(pp, load.demand, tier, aim, game, clocks, () => alive.current && bump((n) => n + 1));
         const r = e.result;
         const own = pp.ownLoad && r ? r.power + (e.extraction ?? []).reduce((s, u) => s + u.power, 0) : 0;
         return {
@@ -208,7 +218,7 @@ function usePlantRows(draws: FactoryDraw[], enabled = true): PlantRow[] {
           leaves: r ? madeBeyond(r.surplus, r.supplies) : [],
         };
       }),
-    [enabled, plants, draws, tier, aim, game, landed],
+    [enabled, plants, draws, tier, aim, game, clocks, landed],
   );
 }
 

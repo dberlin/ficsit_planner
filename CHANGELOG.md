@@ -19,16 +19,23 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 
 - **Dragging a machine** no longer turns its belts into curves: they follow the Belt shape setting (square, curved or
   straight).
+- **Milestone changes during a background solve** no longer cache the answer with a miner unlocked under a different milestone selection.
 
 ### Changed
 
+- **Machines run full:** a line runs every machine at 100% (or the clock you set, if lower) and only a single one at
+  what's left over, so 2.45 smelters are 2 × 100% + 1 × 45% rather than 3 × 81.67%. Power goes up a little, since a
+  machine's power grows faster than its clock: 5 motors a minute take 186.85 MW instead of 184.96 MW. Settings ›
+  Factory floor › Machine clocks › Average puts every machine back at the same clock, for the least power.
 - **The floor is laid out by ELK:** belts run at right angles around machines by default (Belt shape starts at
   Square), each belt meets its machine at its own spot, and the layout tries several arrangements for the fewest
   crossing belts. Laying out happens in the background, so big factories no longer pause the page. Splitters and
   mergers keep their three ends, belts side by side still enter through an end as wide as they are, a belt running
   back against the flow is still marked with its ↺, lines of their own still stand one after the other, and a factory
   whose cards and belts are the same as before (a number changed) is placed again at once without laying it out.
-- **The Manual floor says "Laying out"** while converting a factory, Rebuild or Tidy up work, instead of "Solving".
+- **Upstream 0.14.3 integrated:** item-icon card ends, product-chain areas and balanced splitter trees use the ELK layout;
+  Auto and Manual factories remain separate, with the belt-tier, layout-effort and machine-clock settings retained.
+- **The Manual floor says "Laying out"** while Tidy up works, instead of "Solving".
 
 ## 0.14.7 — 2026-11-15
 
@@ -84,6 +91,7 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 ### Changed
 
 - The step buttons of an amount field that can't be typed are off too.
+
 
 ## 0.14.3 — 2026-10-29
 

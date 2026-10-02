@@ -12,6 +12,7 @@ import {
   planExtraction,
 } from './extraction';
 import { plantUnlocked } from './power';
+import type { ClockSpread } from './settings';
 import type { SolveInput, SolveResult, Target } from './solver';
 import { adaptModel } from './model/calc/adapter';
 import { splitOf } from './split';
@@ -77,7 +78,7 @@ export function factoryInput(
   exports: Export[] = [],
   aim: Aim = 'rarity',
   game?: GameRules,
-  full = false,
+  clocks?: ClockSpread,
 ): SolveInput | undefined {
   const targets = withExports(plan.targets, exports);
   if (targets.length === 0) return undefined;
@@ -95,7 +96,7 @@ export function factoryInput(
     // Fewest buildings counts the miners and pumps too.
     ...(aim === 'buildings' ? { extractorCost: extractorCost(effectiveExtraction(plan.extraction, tier)) } : {}),
     ...(isDefaultGame(game) ? {} : { game }),
-    ...(full ? { full } : {}),
+    ...(clocks ? { clocks } : {}),
   };
 }
 
@@ -111,7 +112,14 @@ type PowerPart = Pick<PowerPlan, 'plants' | 'sizeBy' | 'have' | 'headroom' | 'ow
  * Sized to what you have, the listed items are all there is: every other resource but water is
  * off, and the plant makes as much as those allow.
  */
-export function powerInput(pp: PowerPart, demand: number, tier: number, aim: Aim = 'rarity', game?: GameRules): SolveInput | undefined {
+export function powerInput(
+  pp: PowerPart,
+  demand: number,
+  tier: number,
+  aim: Aim = 'rarity',
+  game?: GameRules,
+  clocks?: ClockSpread,
+): SolveInput | undefined {
   if (pp.plants.length === 0) return undefined;
   const chain = pp.chain;
   const have = pp.sizeBy === 'have';
@@ -134,6 +142,7 @@ export function powerInput(pp: PowerPart, demand: number, tier: number, aim: Aim
     ...(aim === 'custom' && chain.weights ? { weights: chain.weights } : {}),
     ...aimInput(aim),
     ...(isDefaultGame(game) ? {} : { game }),
+    ...(clocks ? { clocks } : {}),
     power: {
       plants: pp.plants.filter((p) => plantUnlocked(p, tier)),
       demand: have ? 0 : demand,
@@ -235,17 +244,17 @@ interface Entry {
   wait?: Promise<void>;
 }
 
-const drawKey = (tier: number, exports: Export[], aim: Aim, game: GameRules, each: boolean, full: boolean) =>
-  `${tier}|${skipKey()}|${aim}|${game.parts}|${game.power}|${each}|${full}|${JSON.stringify(exports)}`;
+const drawKey = (tier: number, exports: Export[], aim: Aim, game: GameRules, each: boolean, clocks: ClockSpread) =>
+  `${tier}|${skipKey()}|${aim}|${game.parts}|${game.power}|${each}|${clocks}|${JSON.stringify(exports)}`;
 
 // Solved draws, kept per plan object and tier: an unchanged factory isn't solved again, and a late
 // answer for one tier can't overwrite another's.
 const cache = new WeakMap<Plan, Map<string, Entry>>();
 
-function entryFor(plan: Plan, tier: number, exports: Export[], aim: Aim, game: GameRules, each: boolean, full: boolean): Entry {
+function entryFor(plan: Plan, tier: number, exports: Export[], aim: Aim, game: GameRules, each: boolean, clocks: ClockSpread): Entry {
   const byTier = cache.get(plan) ?? new Map<string, Entry>();
   cache.set(plan, byTier);
-  const key = drawKey(tier, exports, aim, game, each, full);
+  const key = drawKey(tier, exports, aim, game, each, clocks);
   const hit = byTier.get(key);
   if (hit) return hit;
   const entry: Entry = {};
@@ -267,9 +276,12 @@ function entryFor(plan: Plan, tier: number, exports: Export[], aim: Aim, game: G
       done(result, extraction);
     }, failed);
   } else {
-    const input = factoryInput(plan, tier, exports, aim, game, full);
+    const input = factoryInput(plan, tier, exports, aim, game, clocks);
     if (!input) entry.draw = { mw: 0 };
-    else entry.wait = solveAsync(input).then((r) => done(r, planExtraction(r.raw, effectiveExtraction(plan.extraction, tier))), failed);
+    else {
+      const extraction = effectiveExtraction(plan.extraction, tier);
+      entry.wait = solveAsync(input).then((r) => done(r, planExtraction(r.raw, extraction)), failed);
+    }
   }
   byTier.set(key, entry);
   return entry;
@@ -295,7 +307,7 @@ export function useFactoryEntries(enabled: boolean): FactoryEntry[] {
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
   const each = useStore((s) => s.settings.splitLines) === 'each';
-  const full = useStore((s) => s.settings.clocks) === 'full';
+  const clocks = useStore((s) => s.settings.clockSpread);
   const [landed, bump] = useState(0);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
@@ -303,19 +315,19 @@ export function useFactoryEntries(enabled: boolean): FactoryEntry[] {
     if (!enabled) return;
     let live = true;
     for (const plan of plans) {
-      const entry = entryFor(plan, tier, exportsOf(plans, plan.id), aim, game, each, full);
+      const entry = entryFor(plan, tier, exportsOf(plans, plan.id), aim, game, each, clocks);
       if (!entry.draw) entry.wait?.then(() => live && bump((n) => n + 1));
     }
     return () => {
       live = false;
     };
-  }, [enabled, plans, tier, aim, game, each, full, skipKey()]);
+  }, [enabled, plans, tier, aim, game, each, clocks, skipKey()]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `landed` re-reads the cache once a solve lands.
   return useMemo(
     () =>
       plans.map((plan) => {
-        const entry = cache.get(plan)?.get(drawKey(tier, exportsOf(plans, plan.id), aim, game, each, full));
+        const entry = cache.get(plan)?.get(drawKey(tier, exportsOf(plans, plan.id), aim, game, each, clocks));
         return {
           id: plan.id,
           name: plan.name,
@@ -328,7 +340,7 @@ export function useFactoryEntries(enabled: boolean): FactoryEntry[] {
           machines: entry?.machines,
         };
       }),
-    [plans, tier, aim, game, each, full, landed, skipKey()],
+    [plans, tier, aim, game, each, clocks, landed, skipKey()],
   );
 }
 

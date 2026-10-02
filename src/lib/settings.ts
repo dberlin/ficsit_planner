@@ -47,8 +47,6 @@ export interface Settings {
   areaLabels: 'auto' | 'always' | 'never';
   /** The Auto floor's belts: square turns like the hand-built floor's, curves, or straight lines. */
   autoBelts: BeltShape;
-  /** The Auto floor shows the splitters, mergers and pipe junctions a belt needs where it feeds several machines or is fed by several. */
-  autoSplitters: boolean;
   beltMotion: boolean;
   /** Foundation grid lines on the floor. */
   gridLines: boolean;
@@ -79,11 +77,14 @@ export interface Settings {
   summary: 'compact' | 'full';
   /** A line whose output goes to several places, on the graph: a card per place, or one card that says how to split it. */
   splitLines: 'each' | 'one';
-  /** A line short of whole machines: as many at 100% as fit and one slower, or every machine at the same lower clock. */
-  clocks: 'full' | 'even';
+  /** How a line's machines share its work: all at the same average clock, or all full and a single one at the rest. */
+  clockSpread: ClockSpread;
   /** The save's own multipliers for part costs, power draw and the Space Elevator. */
   game: GameRules;
 }
+
+/** Machines in a line at one average clock (the least power), or every one full and a single one at what's left. */
+export type ClockSpread = 'average' | 'single';
 
 export type FontId = 'satisfactory' | 'poppins' | 'inter' | 'rajdhani' | 'barlow';
 
@@ -121,7 +122,6 @@ export const DEFAULT_SETTINGS: Settings = {
   beltLabels: 'auto',
   areaLabels: 'auto',
   autoBelts: 'square',
-  autoSplitters: false,
   beltMotion: true,
   gridLines: true,
   addWith: 'right',
@@ -137,7 +137,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showLocked: false,
   summary: 'compact',
   splitLines: 'each',
-  clocks: 'full',
+  clockSpread: 'single',
   game: DEFAULT_GAME,
 };
 

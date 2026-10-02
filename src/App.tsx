@@ -96,7 +96,7 @@ function useSolutions() {
   const tier = useTier();
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
-  const full = useStore((s) => s.settings.clocks) === 'full';
+  const clocks = useStore((s) => s.settings.clockSpread);
   // The floor, the table and the Codex read the same recipes the worker solves with.
   applyGame(game);
   const plan = useStore((s) => s.plans.find((p) => p.id === s.active) ?? s.plans[0]);
@@ -113,8 +113,8 @@ function useSolutions() {
   const exports = useExports(plan.id);
   // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const factoryIn = useMemo(
-    () => factoryInput({ targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights }, tier, exports, aim, game, full),
-    [targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights, tier, exports, aim, game, full, skipKey()],
+    () => factoryInput({ targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights }, tier, exports, aim, game, clocks),
+    [targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights, tier, exports, aim, game, clocks, skipKey()],
   );
   // Sized to what you have with nothing listed yet: nothing to solve, the floor asks for the list.
   // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
@@ -122,14 +122,15 @@ function useSolutions() {
     () =>
       sizeBy === 'have' && have.length === 0
         ? undefined
-        : powerInput({ plants, sizeBy, have, headroom, ownLoad, chain }, load.demand, tier, aim, game),
-    [plants, sizeBy, have, headroom, ownLoad, chain, load.demand, tier, aim, game, skipKey()],
+        : powerInput({ plants, sizeBy, have, headroom, ownLoad, chain }, load.demand, tier, aim, game, clocks),
+    [plants, sizeBy, have, headroom, ownLoad, chain, load.demand, tier, aim, game, clocks, skipKey()],
   );
   // Sized to what you have: the same plant making a set 1,000 MW shows what its fuel is made from.
   // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const probeIn = useMemo(
-    () => (sizeBy === 'have' ? powerInput({ plants, sizeBy: 'want', have, headroom, ownLoad, chain }, 1000, tier, aim, game) : undefined),
-    [plants, sizeBy, have, headroom, ownLoad, chain, tier, aim, game, skipKey()],
+    () =>
+      sizeBy === 'have' ? powerInput({ plants, sizeBy: 'want', have, headroom, ownLoad, chain }, 1000, tier, aim, game, clocks) : undefined,
+    [plants, sizeBy, have, headroom, ownLoad, chain, tier, aim, game, clocks, skipKey()],
   );
   const factory = useSolve(factoryIn, mode === 'factory' && !manual);
   const hand = useModelCalc(manual ? (plan.model ?? emptyModel()) : undefined, tier, game, mode === 'factory' && manual);

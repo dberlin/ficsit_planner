@@ -284,7 +284,6 @@ export function cleanSettings(saved: unknown): Settings {
     beltLabels: oneOf(s.beltLabels, ['auto', 'always', 'never'] as const, d.beltLabels),
     areaLabels: oneOf(s.areaLabels, ['auto', 'always', 'never'] as const, d.areaLabels),
     autoBelts: oneOf(s.autoBelts, BELT_SHAPES, d.autoBelts),
-    autoSplitters: s.autoSplitters === true,
     beltMotion: typeof s.beltMotion === 'boolean' ? s.beltMotion : d.beltMotion,
     gridLines: typeof s.gridLines === 'boolean' ? s.gridLines : d.gridLines,
     addWith: oneOf(s.addWith, ['right', 'double'] as const, d.addWith),
@@ -304,7 +303,7 @@ export function cleanSettings(saved: unknown): Settings {
     showLocked: typeof s.showLocked === 'boolean' ? s.showLocked : d.showLocked,
     summary: oneOf(s.summary, ['compact', 'full'] as const, d.summary),
     splitLines: oneOf(s.splitLines, ['each', 'one'] as const, d.splitLines),
-    clocks: oneOf(s.clocks, ['full', 'even'] as const, d.clocks),
+    clockSpread: oneOf(s.clockSpread, ['average', 'single'] as const, d.clockSpread),
     game: gameOf(s.game),
   };
 }

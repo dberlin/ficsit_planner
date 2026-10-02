@@ -514,17 +514,6 @@ function FloorSection() {
           onChange={(v) => set({ splitLines: v })}
         />
       </Row>
-      <Row label={t('clocksSetting')} hint={t('clocksSettingHint')}>
-        <Choice
-          label={t('clocksSetting')}
-          value={s.clocks}
-          options={[
-            { id: 'full', label: t('clocksFull') },
-            { id: 'even', label: t('clocksEven') },
-          ]}
-          onChange={(v) => set({ clocks: v })}
-        />
-      </Row>
       <Row label={t('autoBelts')} hint={t('autoBeltsHint')} spot="belts">
         <Choice
           label={t('autoBelts')}
@@ -535,6 +524,17 @@ function FloorSection() {
             { id: 'straight', label: t('beltStraight') },
           ]}
           onChange={(v) => set({ autoBelts: v })}
+        />
+      </Row>
+      <Row label={t('clockSpread')} hint={t('clockSpreadHint')}>
+        <Choice
+          label={t('clockSpread')}
+          value={s.clockSpread}
+          options={[
+            { id: 'average', label: t('clockSpreadAverage') },
+            { id: 'single', label: t('clockSpreadSingle') },
+          ]}
+          onChange={(v) => set({ clockSpread: v })}
         />
       </Row>
       <Row label={t('beltLabels')} hint={t('beltLabelsHint')} spot="labels">

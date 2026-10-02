@@ -416,9 +416,6 @@ export const en = {
   spacing: 'Spacing',
   spacingHint: 'Room between machines.',
   autoBelts: 'Belt shape',
-  autoSplitters: 'Splitters and mergers',
-  autoSplittersHint:
-    'The Auto floor draws the splitter, merger or junction a belt needs where it feeds several machines or comes from several, as on the Manual floor.',
   autoBeltsHint: 'The Auto floor’s belts: straight runs with square turns like the Manual floor’s, curved, or straight lines.',
   beltCurve: 'Curved',
   beltSquare: 'Square',
@@ -880,12 +877,12 @@ export const en = {
   splitLinesHint: 'A card for each place the output goes, each at its own clock, or one card for the whole line.',
   splitLinesEach: 'A card each',
   splitLinesOne: 'One card',
-  clocksSetting: 'Machines on a line',
-  clocksSettingHint:
-    'As many machines at 100% as fit and one slower, or every machine at the same lower clock: 7 × 95% against 6 × 100% + 1 × 65%.',
-  clocksFull: 'At 100%, one slower',
-  clocksEven: 'All the same clock',
   splitTo: '→ {to}',
+  clockSpread: 'Machine clocks',
+  clockSpreadHint:
+    'Every machine in a line at the same average clock, which takes the least power, or every machine at its configured clock (up to 100%) and a single one at what’s left over.',
+  clockSpreadAverage: 'Average',
+  clockSpreadSingle: 'Single',
   splitExtraOne: 'One more machine than building it as one line, since each group rounds up on its own.',
   splitExtraN: '{n} more machines than building it as one line, since each group rounds up on its own.',
   splitSame: 'Same number of machines as one line.',

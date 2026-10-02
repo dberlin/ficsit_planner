@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { countCrossings, routeSvgPath } from '../src/lib/routes';
+import { arrival, arrowHead, countCrossings, edgePath, routeSvgPath } from '../src/lib/routes';
 
 const p = (x: number, y: number) => ({ x, y });
 
@@ -31,4 +31,22 @@ test('crossings: a real crossing counts once, touching at a shared machine does 
   const s = { source: 'h', target: 'i', points: [p(0, 5), p(4, -5), p(8, 5)] };
   const flat = { source: 'j', target: 'k', points: [p(-1, 0), p(9, 0)] };
   expect(countCrossings([s, flat])).toBe(2);
+});
+
+test('a belt arrives heading along its last run, ignoring repeated end points', () => {
+  // Back-edges arrive heading left, against the flow of the floor.
+  expect(arrival([p(100, 0), p(100, 50), p(0, 50)])).toEqual({ at: p(0, 50), dir: p(-1, 0) });
+  expect(arrival([p(0, 0), p(0, 30), p(0, 30)])).toEqual({ at: p(0, 30), dir: p(0, 1) });
+});
+
+test('the arrowhead tips at the end of the belt, its base set back along the way it came', () => {
+  // Heading right into (100,50): base 10 back, 6 either side.
+  expect(arrowHead({ at: p(100, 50), dir: p(1, 0) }, 10, 12)).toBe('100,50 90,56 90,44');
+});
+
+test('a laid-out belt arrives along its route; a moved one along the fallback', () => {
+  const route = { points: [p(0, 0), p(50, 0), p(50, 20)], label: p(25, 0), from: p(0, 0), to: p(40, 20), routing: 'ORTHOGONAL' as const };
+  const fallback = (): [string, number, number, ReturnType<typeof arrival>] => ['M', 0, 0, { at: p(9, 9), dir: p(-1, 0) }];
+  expect(edgePath(route, p(0, 0), p(40, 20), fallback)[3]).toEqual({ at: p(50, 20), dir: p(0, 1) });
+  expect(edgePath(route, p(0, 0), p(80, 20), fallback)[3]).toEqual({ at: p(9, 9), dir: p(-1, 0) });
 });

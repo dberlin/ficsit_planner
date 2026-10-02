@@ -63,6 +63,7 @@ export const en = {
   onHand: 'On hand',
   bringIn: 'Bring in',
   fit: 'Fit to screen',
+  relayout: 'Lay out again',
   direction: 'Direction',
   leftToRight: 'Left to right',
   topToBottom: 'Top to bottom',

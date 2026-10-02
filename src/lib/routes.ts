@@ -48,18 +48,42 @@ export function routeSvgPath(points: Point[], routing: EdgeRouting): string {
 
 const moved = (a: Point | undefined, b: Point) => !a || Math.abs(a.x - b.x) > 0.5 || Math.abs(a.y - b.y) > 0.5;
 
+/** Where a belt ends, and the way it's heading as it gets there (a unit vector). */
+export interface Arrival {
+  at: Point;
+  dir: Point;
+}
+
+/** How a path through these points arrives: along its last run that has any length. */
+export function arrival(points: Point[]): Arrival {
+  const at = points.at(-1)!;
+  for (let i = points.length - 2; i >= 0; i--) {
+    const len = Math.hypot(at.x - points[i].x, at.y - points[i].y);
+    if (len > 0.5) return { at, dir: { x: (at.x - points[i].x) / len, y: (at.y - points[i].y) / len } };
+  }
+  return { at, dir: { x: 1, y: 0 } };
+}
+
+/** An arrowhead's corners: tip on the belt's end, base `length` back along it and `width` across. */
+export function arrowHead({ at, dir }: Arrival, length: number, width: number): string {
+  const bx = at.x - dir.x * length;
+  const by = at.y - dir.y * length;
+  const [nx, ny] = [(-dir.y * width) / 2, (dir.x * width) / 2];
+  return `${xy(at)} ${xy({ x: bx + nx, y: by + ny })} ${xy({ x: bx - nx, y: by - ny })}`;
+}
+
 /**
- * The belt's path and label spot: the laid-out route while both machines are where the layout put them, otherwise
- * a plain curve between their handles.
+ * The belt's path, label spot and arrival: the laid-out route while both machines are where the layout put them,
+ * otherwise the fallback between their handles.
  */
 export function edgePath(
   route: Route | undefined,
   from: Point | undefined,
   to: Point | undefined,
-  fallback: () => [string, number, number],
-): [string, number, number] {
+  fallback: () => [string, number, number, Arrival],
+): [string, number, number, Arrival] {
   if (!route || moved(from, route.from) || moved(to, route.to)) return fallback();
-  return [routeSvgPath(route.points, route.routing), route.label.x, route.label.y];
+  return [routeSvgPath(route.points, route.routing), route.label.x, route.label.y, arrival(route.points)];
 }
 
 /** A belt as laid out: the machines at its ends and the points it runs through. */

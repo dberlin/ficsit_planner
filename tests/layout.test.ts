@@ -179,10 +179,16 @@ test('route is dropped for moved nodes: the belt falls back to a curve', () => {
     to: { x: 60, y: 0 },
     routing: 'POLYLINE' as const,
   };
-  const fallback = (): [string, number, number] => ['curve', 1, 2];
-  expect(edgePath(route, { x: 0, y: 0 }, { x: 60, y: 0 }, fallback)).toEqual(['M0,0 L50,0', 25, 0]);
-  expect(edgePath(route, { x: 0, y: 0 }, { x: 90, y: 40 }, fallback)).toEqual(['curve', 1, 2]);
-  expect(edgePath(undefined, undefined, undefined, fallback)).toEqual(['curve', 1, 2]);
+  const end = { at: { x: 7, y: 7 }, dir: { x: 0, y: 1 } };
+  const fallback = (): [string, number, number, typeof end] => ['curve', 1, 2, end];
+  expect(edgePath(route, { x: 0, y: 0 }, { x: 60, y: 0 }, fallback)).toEqual([
+    'M0,0 L50,0',
+    25,
+    0,
+    { at: { x: 50, y: 0 }, dir: { x: 1, y: 0 } },
+  ]);
+  expect(edgePath(route, { x: 0, y: 0 }, { x: 90, y: 40 }, fallback)).toEqual(['curve', 1, 2, end]);
+  expect(edgePath(undefined, undefined, undefined, fallback)).toEqual(['curve', 1, 2, end]);
 });
 
 test('every belt label sits in the gap between the machines it joins, with room kept for it', async () => {

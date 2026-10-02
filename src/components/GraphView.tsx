@@ -7,6 +7,8 @@ import {
   ReactFlow,
   ReactFlowProvider,
   getBezierPath,
+  getSmoothStepPath,
+  getStraightPath,
   useInternalNode,
   useReactFlow,
   useStore as useFlowStore,
@@ -38,7 +40,7 @@ import {
 import { useT } from '../lib/i18n';
 import { type Floor, gridLayout, layoutGraph } from '../lib/layout';
 import { latestOnly, layoutInBackground } from '../lib/layoutClient';
-import { edgePath } from '../lib/routes';
+import { type Arrival, type EdgeRouting, arrival, arrowHead, edgePath } from '../lib/routes';
 import { generatorById } from '../lib/data';
 import { minerLabel, recipeLabel } from '../lib/text';
 import { COARSE, useMediaQuery } from '../lib/useMediaQuery';
@@ -409,6 +411,33 @@ function PowerNode({ id, data: d }: NodeProps) {
   );
 }
 
+/** A belt between handles once a machine has been moved off its laid-out spot, drawn in the chosen belt style. */
+function handlePath(
+  routing: EdgeRouting,
+  e: Pick<EdgeProps, 'sourceX' | 'sourceY' | 'targetX' | 'targetY' | 'sourcePosition' | 'targetPosition'>,
+): [string, number, number, Arrival] {
+  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition } = e;
+  const at = { x: targetX, y: targetY };
+  if (routing === 'POLYLINE') {
+    const [p, x, y] = getStraightPath({ sourceX, sourceY, targetX, targetY });
+    return [p, x, y, arrival([{ x: sourceX, y: sourceY }, at])];
+  }
+  const [p, x, y] =
+    routing === 'ORTHOGONAL'
+      ? getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 12 })
+      : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  // Steps and curves both come into the handle square to its side.
+  return [p, x, y, { at, dir: INTO[targetPosition] }];
+}
+
+/** The way into a card through a handle on each of its sides. */
+const INTO: Record<Position, { x: number; y: number }> = {
+  [Position.Left]: { x: 1, y: 0 },
+  [Position.Right]: { x: -1, y: 0 },
+  [Position.Top]: { x: 0, y: 1 },
+  [Position.Bottom]: { x: 0, y: -1 },
+};
+
 /** A power line: a dark cable with current pulsing along its core. */
 function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data: d }: EdgeProps) {
   const { num } = useT();
@@ -416,13 +445,13 @@ function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourceP
   const zoom = useFlowStore(zoomSelector);
   const still = useFlowStore(stillSelector);
   const labels = useStore((s) => s.settings.beltLabels);
+  const routing = useStore((s) => s.settings.edgeRouting);
   const { mw, route } = d as PowerEdgeData;
   const from = useInternalNode(source)?.internals.positionAbsolute;
   const to = useInternalNode(target)?.internals.positionAbsolute;
-  const [path, lx, ly] = edgePath(route, from, to, () => {
-    const [p, x, y] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-    return [p, x, y];
-  });
+  const [path, lx, ly, end] = edgePath(route, from, to, () =>
+    handlePath(routing, { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition }),
+  );
   const lit = focus.nodes !== undefined && (focus.nodes.has(source) || focus.nodes.has(target));
   const faded = focus.nodes !== undefined && !lit;
   const state = `${faded ? 'faded' : ''} ${lit ? 'lit' : ''} ${still ? 'still' : ''}`;
@@ -432,6 +461,7 @@ function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourceP
       <g className={`power-edge ${state}`}>
         <path d={path} className="cable" />
         <path d={path} className="cable-core" />
+        <polygon points={arrowHead(end, 16, 24)} className="cable-arrow" />
       </g>
       {showLabel && (
         <EdgeLabelRenderer>
@@ -458,16 +488,16 @@ function FlowEdge({ source, target, sourceX, sourceY, targetX, targetY, sourcePo
   const zoom = useFlowStore(zoomSelector);
   const still = useFlowStore(stillSelector);
   const labels = useStore((s) => s.settings.beltLabels);
+  const routing = useStore((s) => s.settings.edgeRouting);
   const oneColor = useStore((s) => s.settings.beltColors === 'one');
   const { item, rate, transport, lanes, route } = d as FlowEdgeData;
   const it = data.items[item];
   const from = useInternalNode(source)?.internals.positionAbsolute;
   const to = useInternalNode(target)?.internals.positionAbsolute;
   // As laid out: follow the route around the machines, through the label's reserved spot.
-  const [path, lx, ly] = edgePath(route, from, to, () => {
-    const [p, x, y] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-    return [p, x, y];
-  });
+  const [path, lx, ly, end] = edgePath(route, from, to, () =>
+    handlePath(routing, { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition }),
+  );
   const fluid = it.form !== 'solid';
   // Side by side lines widen the belt, up to a point: past a few, the label's "123×" says how many.
   const drawn = Math.min(lanes, MAX_DRAWN_LANES);
@@ -481,11 +511,13 @@ function FlowEdge({ source, target, sourceX, sourceY, targetX, targetY, sourcePo
   if (fluid) {
     const mk = pipeIndex(transport.id);
     const w = mk === 0 ? 9 : 12;
+    const wide = w + 4 * (drawn - 1);
     tierColor = it.color ?? 'var(--fluid)';
     body = (
       <g className={`pipe-edge ${state}`}>
         <path d={path} className="pipe-casing" style={{ strokeWidth: w + 4 * (drawn - 1) }} />
         <path d={path} className="pipe-fluid" style={{ stroke: tierColor, strokeWidth: w - 4 }} />
+        <polygon points={arrowHead(end, wide + 8, wide * 1.6 + 10)} className="pipe-arrow" style={{ fill: tierColor }} />
       </g>
     );
   } else {
@@ -500,6 +532,7 @@ function FlowEdge({ source, target, sourceX, sourceY, targetX, targetY, sourcePo
         <path d={path} className="belt-rails" style={{ strokeWidth: w }} />
         <path d={path} className="belt-bed" style={{ strokeWidth: w - 5 }} />
         <path d={path} className="belt-slats" style={{ strokeWidth: w - 5 }} />
+        <polygon points={arrowHead(end, w + 8, w * 1.6 + 10)} className="belt-arrow" />
       </g>
     );
   }
@@ -537,7 +570,8 @@ const nodeTypes = { machine: MachineNode, endpoint: EndpointNode, power: PowerNo
 const edgeTypes = { flow: FlowEdge, power: PowerEdge };
 
 /** The direction switch (left to right or top to bottom) and fit to screen. */
-function FloorControls() {
+/** The floor's own buttons; `relayout` puts dragged machines back where the layout had them. */
+function FloorControls({ relayout }: { relayout?: () => void }) {
   const { t } = useT();
   const flow = useReactFlow();
   const dir = useContext(Flow);
@@ -560,11 +594,19 @@ function FloorControls() {
         title={t('fit')}
         onClick={() => flow.fitView({ padding: { top: '24px', left: '24px', right: '24px', bottom: `${BAR}px` }, duration: 250 })}
       >
-        <span className="fit-icon" aria-hidden>
+        <span className="floor-icon" aria-hidden>
           ⤢
         </span>
-        <span className="fit-label">{t('fit')}</span>
+        <span className="floor-label">{t('fit')}</span>
       </button>
+      {relayout && (
+        <button type="button" className="floor-button" title={t('relayout')} onClick={relayout}>
+          <span className="floor-icon" aria-hidden>
+            ↺
+          </span>
+          <span className="floor-label">{t('relayout')}</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -634,11 +676,13 @@ function openingViewport(nodes: Node[], width: number, height: number, dir: Dire
 // Camera survives re-solves that keep the same machines (e.g. tweaking a clock speed).
 let camera: { sig: string; viewport?: Viewport } = { sig: '' };
 
-function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig: string; dir: Direction }) {
+function Canvas({ nodes, edges, sig, dir, relayout }: { nodes: Node[]; edges: Edge[]; sig: string; dir: Direction; relayout: () => void }) {
   const inspect = useStore((s) => s.inspect);
   const set = useStore((s) => s.set);
   const gridLines = useStore((s) => s.settings.gridLines);
   const [hover, setHover] = useState<string>();
+  // Offer to lay the floor out again only once a machine has been moved off its spot.
+  const [dragged, setDragged] = useState(false);
   const [restore] = useState(() => (camera.sig === sig ? camera.viewport : undefined));
   // A huge factory may need to zoom out past the usual floor to fit the screen whole.
   const [minZoom] = useState(() => {
@@ -707,6 +751,7 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
         edgeTypes={edgeTypes}
         nodesConnectable={false}
         nodesDraggable={!coarse}
+        onNodeDragStop={() => setDragged(true)}
         edgesFocusable={false}
         minZoom={minZoom}
         maxZoom={2}
@@ -733,7 +778,7 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
         {/* Foundation grid: minor lines every 8 m tile, a heavier seam every 4 tiles. */}
         {gridLines && <Background id="minor" variant={BackgroundVariant.Lines} gap={40} lineWidth={1} color="#2f2f2f" />}
         {gridLines && <Background id="major" variant={BackgroundVariant.Lines} gap={160} lineWidth={1} color="#3b3b3b" />}
-        <FloorControls />
+        <FloorControls relayout={dragged ? relayout : undefined} />
       </ReactFlow>
     </Focus.Provider>
   );
@@ -800,6 +845,8 @@ export function GraphView({
   const [floor, setFloor] = useState(() => recallFloor<Shown>(result, settingsKey));
   // Busy from the first render when there is nothing to show yet, so nothing waiting on the floor goes ahead early.
   const [pending, setPending] = useState(() => !recallFloor(result, settingsKey));
+  // Bumped to remount the floor from its layout, dropping wherever machines were dragged.
+  const [redo, setRedo] = useState(0);
   useEffect(() => {
     const kept = recallFloor<Shown>(result, settingsKey);
     const box = document.querySelector('.floor-view')?.getBoundingClientRect();
@@ -849,8 +896,8 @@ export function GraphView({
       <Extraction.Provider value={exMap}>
         <Links.Provider value={links}>
           <Flow.Provider value={dir}>
-            <ReactFlowProvider key={key}>
-              <Canvas nodes={nodes} edges={edges} sig={sig} dir={dir} />
+            <ReactFlowProvider key={`${key}.${redo}`}>
+              <Canvas nodes={nodes} edges={edges} sig={sig} dir={dir} relayout={() => setRedo((r) => r + 1)} />
             </ReactFlowProvider>
           </Flow.Provider>
         </Links.Provider>

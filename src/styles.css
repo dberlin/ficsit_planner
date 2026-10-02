@@ -1545,7 +1545,7 @@ button.slot:hover {
   gap: 10px;
 }
 
-.fit-icon {
+.floor-icon {
   display: none;
   font-size: 20px;
   line-height: 1;
@@ -2708,6 +2708,20 @@ button.slot:hover {
   stroke: color-mix(in srgb, var(--belt) 55%, #17191c);
   stroke-dasharray: 3 7;
   animation: belt var(--belt-speed) linear infinite;
+}
+
+/* Arrowheads where belts, pipes and cables arrive: not every line runs with the floor. */
+.belt-arrow {
+  fill: var(--belt);
+  stroke: #17191c;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.pipe-arrow {
+  stroke: #5b646d;
+  stroke-width: 2;
+  stroke-linejoin: round;
 }
 
 .pipe-casing {
@@ -4107,6 +4121,13 @@ button.gen-count[aria-pressed='true'] {
   to {
     stroke-dashoffset: -32;
   }
+}
+
+.cable-arrow {
+  fill: var(--power);
+  stroke: #0e1012;
+  stroke-width: 2;
+  stroke-linejoin: round;
 }
 
 .power-edge.faded {
@@ -5733,18 +5754,18 @@ button.gen-count[aria-pressed='true'] {
     display: none;
   }
 
-  /* Bottom right like on desktop, with Fit as an icon so it fits beside Factory / List. */
+  /* Bottom right like on desktop, with Fit and Lay out again as icons so they fit beside Factory / List. */
   .floor-controls {
     right: 10px;
     bottom: 10px;
     gap: 6px;
   }
 
-  .fit-label {
+  .floor-label {
     display: none;
   }
 
-  .fit-icon {
+  .floor-icon {
     display: inline;
   }
 

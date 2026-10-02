@@ -14,3 +14,9 @@ test('saved layout settings are kept when known and defaulted when not', () => {
   const junk = cleanSettings({ layoutPlacement: 'DAGRE', edgeRouting: 7, layoutEffort: null });
   expect([junk.layoutPlacement, junk.edgeRouting, junk.layoutEffort]).toEqual(['NETWORK_SIMPLEX', 'ORTHOGONAL', 'balanced']);
 });
+
+test('machine clocks default to single and keep average when saved', () => {
+  expect(DEFAULT_SETTINGS.clockSpread).toBe('single');
+  expect(cleanSettings({ clockSpread: 'average' }).clockSpread).toBe('average');
+  expect(cleanSettings({ clockSpread: 'even' }).clockSpread).toBe('single');
+});

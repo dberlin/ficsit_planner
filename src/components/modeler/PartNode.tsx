@@ -97,7 +97,7 @@ function Machine({ data: d, selected }: { data: PartData; selected: boolean }) {
   if (n.k !== 'machine' && n.k !== 'gen') return null;
   const recipe = runnerRecipe(n);
   if (!recipe) return null;
-  const use = describeUse(recipe, { clock: n.clock ?? 1, sloops: n.k === 'machine' ? (n.sloops ?? 0) : 0 }, n.n ?? 1, true);
+  const use = describeUse(recipe, { clock: n.clock ?? 1, sloops: n.k === 'machine' ? (n.sloops ?? 0) : 0 }, n.n ?? 1, 'set');
   const bar = modBar(use.shards, use.sloops);
   const ends = Math.max(recipe.inputs.length, recipe.outputs.length);
   return (

@@ -86,6 +86,7 @@ function useSolutions() {
   const tier = useStore((s) => s.tier);
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
+  const clocks = useStore((s) => s.settings.clockSpread);
   // The floor, the table and the Codex read the same recipes the worker solves with.
   applyGame(game);
   const plan = useStore((s) => s.plans.find((p) => p.id === s.active) ?? s.plans[0]);
@@ -99,21 +100,22 @@ function useSolutions() {
   const { targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights } = plan;
   const exports = useExports(plan.id);
   const factoryIn = useMemo(
-    () => factoryInput({ targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights }, tier, exports, aim, game),
-    [targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights, tier, exports, aim, game],
+    () => factoryInput({ targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights }, tier, exports, aim, game, clocks),
+    [targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights, tier, exports, aim, game, clocks],
   );
   // Sized to what you have with nothing listed yet: nothing to solve, the floor asks for the list.
   const powerIn = useMemo(
     () =>
       sizeBy === 'have' && have.length === 0
         ? undefined
-        : powerInput({ plants, sizeBy, have, headroom, ownLoad, chain }, load.demand, tier, aim, game),
-    [plants, sizeBy, have, headroom, ownLoad, chain, load.demand, tier, aim, game],
+        : powerInput({ plants, sizeBy, have, headroom, ownLoad, chain }, load.demand, tier, aim, game, clocks),
+    [plants, sizeBy, have, headroom, ownLoad, chain, load.demand, tier, aim, game, clocks],
   );
   // Sized to what you have: the same plant making a set 1,000 MW shows what its fuel is made from.
   const probeIn = useMemo(
-    () => (sizeBy === 'have' ? powerInput({ plants, sizeBy: 'want', have, headroom, ownLoad, chain }, 1000, tier, aim, game) : undefined),
-    [plants, sizeBy, have, headroom, ownLoad, chain, tier, aim, game],
+    () =>
+      sizeBy === 'have' ? powerInput({ plants, sizeBy: 'want', have, headroom, ownLoad, chain }, 1000, tier, aim, game, clocks) : undefined,
+    [plants, sizeBy, have, headroom, ownLoad, chain, tier, aim, game, clocks],
   );
   const factory = useSolve(factoryIn, mode === 'factory' && !manual);
   const hand = useModelCalc(manual ? (plan.model ?? emptyModel()) : undefined, tier, game, mode === 'factory' && manual);
@@ -208,7 +210,14 @@ export default function App() {
         const tab = plan.supplies.find((y) => y.item === x.item)?.from;
         return tab ? { ...x, from: tab } : x;
       });
-      const input = factoryInput({ ...plan, targets: from.targets, supplies }, s.tier, exports, aimOf(s), s.settings.game);
+      const input = factoryInput(
+        { ...plan, targets: from.targets, supplies },
+        s.tier,
+        exports,
+        aimOf(s),
+        s.settings.game,
+        s.settings.clockSpread,
+      );
       if (!input) return;
       const r = await solveAsync(input);
       const model = await lay(() => modelFromSolve(r, s.tier, effectiveExtraction(plan.extraction, s.tier), dirOf(m), plan.built));

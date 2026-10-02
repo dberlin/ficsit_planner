@@ -22,6 +22,10 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 
 ### Changed
 
+- **Machines run full:** a line runs every machine at 100% (or the clock you set, if lower) and only a single one at
+  what's left over, so 2.45 smelters are 2 × 100% + 1 × 45% rather than 3 × 81.67%. Power goes up a little, since a
+  machine's power grows faster than its clock: 5 motors a minute take 186.85 MW instead of 184.96 MW. Settings ›
+  Factory floor › Machine clocks › Average puts every machine back at the same clock, for the least power.
 - **The floor is laid out by ELK:** belts run at right angles around machines by default, each belt meets its machine
   at its own spot, and the layout tries several arrangements for the fewest crossing belts. Laying out happens in the
   background, so big factories no longer pause the page. Lines of their own are each laid out apart and stand one

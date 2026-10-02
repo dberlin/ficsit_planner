@@ -10,6 +10,15 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
   into groups whose belts and pipes all fit the chosen tier, each group with its own clocks, power, shards and
   somersloops.
 - **Layout settings:** machine placement, belt routing (right angles, curves or straight) and layout effort.
+- **Arrows on the floor:** every belt, pipe and power line ends in an arrowhead pointing into the machine it feeds,
+  so belts running back against the flow read the right way.
+- **Lay out again:** once a machine has been dragged, a button beside Fit to screen puts every machine back where the
+  layout had it.
+
+### Fixed
+
+- **Dragging a machine** no longer turns its belts into curves: they follow the belt routing setting (right angles,
+  curves or straight).
 
 ### Changed
 

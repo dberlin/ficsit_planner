@@ -1,4 +1,6 @@
-import type { ELK, ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api';
+import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api';
+import type { Engine } from '../layout';
+import { layoutInBackground } from '../layoutClient';
 import { cardSize, dirOf, endSpot, GRID, HALF, portY } from './layout';
 import { type Block, findGroups, layoutGroup, leaning, loose, type Pt, type Route } from './lines';
 import { portsOf } from './ports';
@@ -30,9 +32,6 @@ const VARIANTS: Record<string, string>[] = [
  */
 const QUICK = { 'elk.layered.thoroughness': '7' };
 
-/** Workers the tries are shared between, so they run side by side. */
-const WORKERS = 2;
-
 const ON_BELT = { 'elk.edgeLabels.placement': 'CENTER', 'elk.edgeLabels.inline': 'true' };
 
 const BASE: Record<string, string> = {
@@ -55,21 +54,15 @@ const BASE: Record<string, string> = {
   'elk.padding': '[top=40,left=40,bottom=40,right=40]',
 };
 
-let engines: Promise<ELK[]> | undefined;
 /**
- * The layout engine is big, so it's fetched the first time a floor is laid out, not with the app, and it runs in
- * workers of its own so the page doesn't stall on a big factory.
+ * The Auto floor's pool of layout workers, so the tries run side by side off the main thread, and on it only where
+ * workers won't start.
  */
-const elk = () => {
-  engines ??= Promise.all([import('elkjs/lib/elk-api.js'), import('elkjs/lib/elk-worker.min.js?url')]).then(([api, url]) =>
-    Array.from({ length: WORKERS }, () => new api.default({ workerUrl: url.default })),
-  );
-  return engines;
-};
+let engine: Engine = layoutInBackground;
 
-/** Runs layouts on other engines: the tests use ones with workers of their own. */
-export const setLayoutEngine = (list: ELK[]) => {
-  engines = Promise.resolve(list);
+/** Runs layouts on another engine (undefined: the workers again); the tests use workers of their own. */
+export const setLayoutEngine = (e?: Engine) => {
+  engine = e ?? layoutInBackground;
 };
 
 interface Laid {
@@ -132,7 +125,6 @@ async function place(
   linksIn: MLink[],
   dir: 'LR' | 'TB',
   variant: Record<string, string>,
-  engine: ELK,
   alone = false,
   ctx: Ctx = {},
 ): Promise<Laid & { lines: Pt[][] }> {
@@ -253,7 +245,9 @@ async function place(
       }),
     ),
   };
-  const out = await engine.layout(graph);
+  const out = await engine(graph);
+  // Onto the grid: cards on its lines, so their ends are too; bends on a line or halfway, which keeps belts that ran
+  // side by side apart. The first and last stretch of a belt stay level with the ends they leave and reach.
   const on = (v: number, step: number) => Math.round(v / step) * step;
   const pos = new Map<string, Pt>();
   for (const c of out.children ?? []) {
@@ -317,10 +311,10 @@ async function place(
   return { pos, routes, score: alone ? 0 : score(lines), lines };
 }
 
+/** The model laid out afresh, as `arrangeModel` does, without putting it on the model yet. */
 export async function arrangement(m: Model, quick = false): Promise<Arrangement> {
   const nodes = m.nodes.filter(isPart);
   if (!nodes.length) return { pos: new Map(), routes: new Map() };
-  const pool = await elk();
   const dir = dirOf(m);
   const ids = new Set(nodes.map((n) => n.id));
   const links = m.links.filter((l) => ids.has(l.a) && ids.has(l.b));
@@ -330,9 +324,7 @@ export async function arrangement(m: Model, quick = false): Promise<Arrangement>
   const inBlock = new Set(blocks.flatMap((b) => [...b.members]));
   const rest = nodes.filter((n) => !inBlock.has(n.id));
   const tries = await Promise.all(
-    (quick ? [{ ...VARIANTS[0], ...QUICK }] : VARIANTS).map((v, i) =>
-      place(rest, links, dir, v, pool[i % pool.length], quick, { blocks, all }),
-    ),
+    (quick ? [{ ...VARIANTS[0], ...QUICK }] : VARIANTS).map((v) => place(rest, links, dir, v, quick, { blocks, all })),
   );
   const best = tries.reduce((a, b) => (b.score < a.score ? b : a));
   const routes = new Map(best.routes);
@@ -359,6 +351,11 @@ export async function arrangeModel(m: Model, quick = false): Promise<Model> {
 
 export type Arrangement = Pick<Laid, 'pos' | 'routes'>;
 
+/**
+ * A layout put on the model as it is by now, which may have changed while the layout was worked out: cards it placed
+ * move there and their belts take its bends. Cards and belts it doesn't know (added meanwhile) stay as they are, but a
+ * belt touching a card that moved loses its old bends, which would lead nowhere now.
+ */
 export function applyArrangement(m: Model, a: Arrangement): Model {
   if (a.pos.size === 0) return m;
   return {

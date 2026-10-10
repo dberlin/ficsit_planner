@@ -3,6 +3,7 @@ import { BELT_COLORS } from '../../lib/belts';
 import { data, type Transport } from '../../lib/data';
 import { LANE_PITCH } from '../../lib/graph';
 import { pipeColor } from '../../lib/pipe';
+import { type Arrival, arrowHead } from '../../lib/routes';
 import { inkOn } from '../../lib/settings';
 
 const beltIndex = (id: string) =>
@@ -114,7 +115,8 @@ export function BeltChevrons({
 
 /**
  * A conveyor belt (rails, bed, moving slats) or a pipe (casing, flowing fluid) along a path, as both floors draw them.
- * Side by side lines widen it. Returns the drawing and the colour of its tier, for the label's Mk badge.
+ * Side by side lines widen it, and `end` puts an arrowhead where it arrives. Returns the drawing and the colour of its
+ * tier, for the label's Mk badge.
  */
 export function beltStroke({
   path,
@@ -125,6 +127,7 @@ export function beltStroke({
   oneColor = false,
   wide,
   pitch: apartBy = LANE_PITCH,
+  end,
 }: {
   path: string;
   item: string;
@@ -136,19 +139,23 @@ export function beltStroke({
   wide?: { from: boolean; to: boolean };
   /** How far apart the belts side by side run, centre to centre. */
   pitch?: number;
+  /** Where the belt arrives and which way it's heading, for its arrowhead. */
+  end?: Arrival;
 }): { body: ReactNode; color: string; ink?: string } {
   const it = data.items[item];
   if (it && it.form !== 'solid') {
     const mk = pipeIndex(transport.id);
     const w = mk === 0 ? 9 : 12;
     const color = pipeColor(it) ?? 'var(--fluid)';
+    const casing = w + 4 * (lanes - 1);
     return {
       color,
       ink: pipeColor(it) ? inkOn(color) : undefined,
       body: (
         <g className={`pipe-edge ${state}`}>
-          <path d={path} className="pipe-casing" style={{ strokeWidth: w + 4 * (lanes - 1) }} />
+          <path d={path} className="pipe-casing" style={{ strokeWidth: casing }} />
           <path d={path} className="pipe-fluid" style={{ stroke: color, strokeWidth: w - 4 }} />
+          {end && <polygon points={arrowHead(end, casing + 8, casing * 1.6 + 10)} className="pipe-arrow" style={{ fill: color }} />}
         </g>
       ),
     };
@@ -160,6 +167,15 @@ export function beltStroke({
   if (apart) {
     // Each belt is its own path, so the line stays readable round a bend and the belts join only at the handles.
     const speed = 2 / Math.sqrt(mk + 1);
+    // Belts going in side by side through a wide end get an arrowhead each; belts that join first share one.
+    const arrows = !end
+      ? []
+      : wide?.to
+        ? Array.from({ length: lanes }, (_, i) => {
+            const o = (i - (lanes - 1) / 2) * apartBy;
+            return { at: { x: end.at.x - end.dir.y * o, y: end.at.y + end.dir.x * o }, dir: end.dir };
+          })
+        : [end];
     return {
       color,
       body: (
@@ -182,6 +198,9 @@ export function beltStroke({
               speed={speed}
               most={Math.max(24, Math.floor((MAX_CHEVRONS * 2) / apart.length))}
             />
+          ))}
+          {arrows.map((a) => (
+            <polygon key={`${a.at.x},${a.at.y}`} points={arrowHead(a, across + 8, across * 1.6 + 10)} className="belt-arrow" />
           ))}
         </g>
       ),
@@ -207,6 +226,7 @@ export function beltStroke({
           </g>
         ))}
         <BeltChevrons path={path} width={bed} speed={2 / Math.sqrt(mk + 1)} lanes={lanes} pitch={pitch} />
+        {end && <polygon points={arrowHead(end, w + 8, w * 1.6 + 10)} className="belt-arrow" />}
       </g>
     ),
   };

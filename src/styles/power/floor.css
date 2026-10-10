@@ -275,6 +275,13 @@
   }
 }
 
+.cable-arrow {
+  fill: var(--power);
+  stroke: #0e1012;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
 .power-edge.faded {
   opacity: 0.12;
 }

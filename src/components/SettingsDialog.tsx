@@ -7,9 +7,12 @@ import {
   clampSetting,
   DEFAULT_COLORS,
   DEFAULT_SETTINGS,
+  EFFORTS,
   FONTS,
   type LIMITS,
   type PanelSide,
+  PLACEMENTS,
+  ROUTINGS,
   type Settings,
   sameSettings,
 } from '../lib/settings';
@@ -443,15 +446,12 @@ function FloorSection() {
           onChange={(v) => set({ splitLines: v })}
         />
       </Row>
-      <Row label={t('autoBelts')} hint={t('autoBeltsHint')} spot="belts">
+      <Row label={t('edgeRouting')} hint={t('edgeRoutingHint')} spot="belts">
         <Choice
-          label={t('autoBelts')}
-          value={s.autoBelts}
-          options={[
-            { id: 'curve', label: t('beltCurve') },
-            { id: 'square', label: t('beltSquare') },
-          ]}
-          onChange={(v) => set({ autoBelts: v })}
+          label={t('edgeRouting')}
+          value={s.edgeRouting}
+          options={ROUTINGS.map((r) => ({ id: r, label: t(`routing_${r}`) }))}
+          onChange={(v) => set({ edgeRouting: v })}
         />
       </Row>
       <Row label={t('autoSplitters')} hint={t('autoSplittersHint')} spot="splitters">
@@ -501,6 +501,23 @@ function FloorSection() {
           value={s.pipeSplit}
           options={[{ id: 'off', label: t('noSplit') }, ...data.pipes.map((p) => ({ id: p.id, label: p.name }))]}
           onChange={(v) => set({ pipeSplit: v })}
+        />
+      </Row>
+      <Row label={t('layoutPlacement')} hint={t('layoutPlacementHint')}>
+        <Choice
+          label={t('layoutPlacement')}
+          wrap
+          value={s.layoutPlacement}
+          options={PLACEMENTS.map((p) => ({ id: p, label: t(`placement_${p}`) }))}
+          onChange={(v) => set({ layoutPlacement: v })}
+        />
+      </Row>
+      <Row label={t('layoutEffort')} hint={t('layoutEffortHint')}>
+        <Choice
+          label={t('layoutEffort')}
+          value={s.layoutEffort}
+          options={EFFORTS.map((e) => ({ id: e, label: t(`effort_${e}`) }))}
+          onChange={(v) => set({ layoutEffort: v })}
         />
       </Row>
     </>

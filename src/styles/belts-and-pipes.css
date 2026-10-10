@@ -46,6 +46,20 @@
   animation-play-state: paused;
 }
 
+/* Arrowheads where belts, pipes and cables arrive: not every line runs with the floor. */
+.belt-arrow {
+  fill: var(--belt);
+  stroke: #17191c;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.pipe-arrow {
+  stroke: #5b646d;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
 .pipe-casing {
   stroke: #5b646d;
   stroke-linecap: round;

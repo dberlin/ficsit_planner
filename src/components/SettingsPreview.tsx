@@ -2,7 +2,7 @@ import { createContext, Fragment, useEffect, useRef, useState } from 'react';
 import { data } from '../lib/data';
 import { useT } from '../lib/i18n';
 import { LOGISTICS } from '../lib/model/catalog';
-import { settingsStyle, type Settings } from '../lib/settings';
+import { type EdgeRouting, settingsStyle, type Settings } from '../lib/settings';
 import { recipeLabel } from '../lib/text';
 import { RunLine } from './GraphView';
 import { Icon } from './Icon';
@@ -71,11 +71,11 @@ const REFERENCE = {
   compact: geometry({ cardScale: 1, textScale: 1, spacing: 1 }, true),
 };
 
-/** A belt from one handle to another: a curve, or straight runs with rounded square turns. */
-function beltPath(x1: number, y1: number, x2: number, y2: number, square: boolean): string {
+/** A belt from one handle to another: straight runs with rounded square turns, a curve, or a straight line. */
+function beltPath(x1: number, y1: number, x2: number, y2: number, routing: EdgeRouting): string {
   const m = (x1 + x2) / 2;
-  if (Math.abs(y2 - y1) < 1) return `M${x1},${y1} L${x2},${y2}`;
-  if (!square) return `M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}`;
+  if (Math.abs(y2 - y1) < 1 || routing === 'POLYLINE') return `M${x1},${y1} L${x2},${y2}`;
+  if (routing === 'SPLINES') return `M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}`;
   const r = Math.min(24, Math.abs(y2 - y1) / 2, (x2 - x1) / 4);
   const d = Math.sign(y2 - y1);
   return `M${x1},${y1} H${m - r} Q${m},${y1} ${m},${y1 + d * r} V${y2 - d * r} Q${m},${y2} ${m + r},${y2} H${x2}`;
@@ -113,14 +113,14 @@ export function Preview({ settings: s, spot }: { settings: Settings; spot?: Spot
 
   const plates = recipe('Recipe_IronPlate_C');
   const screws = recipe('Recipe_Alternate_Screw_C');
-  const square = s.autoBelts === 'square';
+  const routing = s.edgeRouting;
   const oneColor = s.beltColors === 'one';
   const transport = data.belts[1];
   const ingot = 'Desc_IronIngot_C';
 
   const belts: { key: string; path: string; item: string; lanes: number; rate: number; at: [number, number] }[] = [];
   const add = (key: string, x1: number, y1: number, x2: number, y2: number, item: string, lanes: number, rate: number) =>
-    belts.push({ key, path: beltPath(x1, y1, x2, y2, square), item, lanes, rate, at: [(x1 + x2) / 2, (y1 + y2) / 2] });
+    belts.push({ key, path: beltPath(x1, y1, x2, y2, routing), item, lanes, rate, at: [(x1 + x2) / 2, (y1 + y2) / 2] });
   const out = g.xM + g.mw;
   // Pointing at 'Lines feeding several places': one line that goes to two places, as a card each or as one card.
   const lines = spot === 'lines';

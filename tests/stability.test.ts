@@ -100,9 +100,9 @@ describe('a factory survives being saved, backed up and shared', () => {
   });
 
   test('settings and power plans clean the same way', () => {
-    const settings = cleanSettings({ ...DEFAULT_SETTINGS, autoBelts: 'square' });
+    const settings = cleanSettings({ ...DEFAULT_SETTINGS, edgeRouting: 'SPLINES' });
     expect(cleanSettings(settings)).toEqual(settings);
-    for (const j of [null, 5, 'x', [], { autoBelts: 'zigzag', theme: 12, cardSize: 'huge', splitLines: {} }]) {
+    for (const j of [null, 5, 'x', [], { edgeRouting: 'zigzag', theme: 12, cardSize: 'huge', splitLines: {} }]) {
       const s = cleanSettings(j);
       expect(cleanSettings(s)).toEqual(s);
     }

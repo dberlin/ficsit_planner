@@ -144,10 +144,10 @@ export default function App() {
   const solved = powerMode ? power : factory;
   const result = manual ? hand.adapted?.result : solved.result;
   const error = manual ? hand.error : solved.error;
-  // Laying a floor out takes a moment the first time, while the layout engine loads.
+  // Laying a hand-built floor out takes a moment the first time, while the layout engine loads; the floor says so.
   const [laying, setLaying] = useState(false);
   const solverLoad = useSolverLoading();
-  const busy = laying || (manual ? hand.busy : solved.busy);
+  const busy = manual ? hand.busy : solved.busy;
   const solverReady = useSolverReady();
   // The opening screen tells how far along things are, and goes once the solver is ready and the first answer is in.
   const answered = !!result || !!error;
@@ -155,11 +155,11 @@ export default function App() {
   useEffect(() => {
     if (!solverReady)
       return bootText(solverLoad === undefined ? t('loadingGame') : `${t('loadingSolver')} ${Math.round(solverLoad * 100)}%`);
-    if (busy) return bootText(t('workingOut'));
+    if (busy || laying) return bootText(t('workingOut'));
     // Nothing to work out (an empty plan, the Codex) shows up as idle; a plan about to be solved starts within a moment.
     const timer = setTimeout(bootDone, answered ? 0 : 320);
     return () => clearTimeout(timer);
-  }, [solverReady, solverLoad, busy, answered, t]);
+  }, [solverReady, solverLoad, busy, laying, answered, t]);
   const lay = async <T,>(work: () => Promise<T>) => {
     setLaying(true);
     try {
@@ -511,6 +511,7 @@ export default function App() {
                 <Inspector result={result} />
               ))}
             {busy && <Busy solverLoad={solverLoad} />}
+            {laying && <div className="busy laying-out">{t('layingOut')}</div>}
             {shown && (
               <div className="floor-bar">
                 {!powerMode && (

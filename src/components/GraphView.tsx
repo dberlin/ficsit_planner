@@ -8,6 +8,7 @@ import {
   ReactFlowProvider,
   getBezierPath,
   getSmoothStepPath,
+  getStraightPath,
   useInternalNode,
   useReactFlow,
   useStore as useFlowStore,
@@ -18,12 +19,13 @@ import {
   type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, type CSSProperties, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { groupClocks } from '../lib/clocks';
 import { buildGroups, groupsLabel, isPipe } from '../lib/groups';
 import { data } from '../lib/data';
 import { GRID } from '../lib/model/layout';
 import type { ExtractionUse } from '../lib/extraction';
+import { recallFloor, rememberFloor } from '../lib/floorCache';
 import {
   buildGraph,
   type Consumer,
@@ -36,13 +38,16 @@ import {
   MAX_LANES,
   portSpots,
   type MachineNodeData,
-  type Point,
   type PowerEdgeData,
   type PowerNodeData,
   cardExtra,
+  type Port,
   runExtra,
 } from '../lib/graph';
 import { useT } from '../lib/i18n';
+import { type Floor, gridLayout, layoutGraph } from '../lib/layout';
+import { latestOnly, layoutInBackground } from '../lib/layoutClient';
+import { type Arrival, type EdgeRouting, arrival, arrowHead, edgePath, moved } from '../lib/routes';
 import { LOGISTICS } from '../lib/model/catalog';
 import { autoScope, canRedo, canUndo, powerScope } from '../lib/model/history';
 import { generatorById } from '../lib/data';
@@ -52,7 +57,6 @@ import { COARSE, useMediaQuery } from '../lib/useMediaQuery';
 import type { SolveResult } from '../lib/solver';
 import { activePowerPlan, toggleBuilt, togglePooled, usePlan, useStore } from '../store';
 import { beltStroke } from './floor/BeltStroke';
-import { longestRunMid, SQUARE_TURN, squarePath } from './floor/squarePath';
 import { Glyph } from './Glyph';
 import { Icon } from './Icon';
 import { Slot } from './Slot';
@@ -82,6 +86,42 @@ export interface FactoryLinks {
 const Links = createContext<FactoryLinks | undefined>(undefined);
 const inSide = (dir: Direction) => (dir === 'TB' ? Position.Top : Position.Left);
 const outSide = (dir: Direction) => (dir === 'TB' ? Position.Bottom : Position.Right);
+
+/**
+ * A card grown by the layout to fit its belts: its new length along the side the belts meet, divided by the card
+ * size, since the stylesheet zooms every card by it.
+ */
+function sideStyle(d: Record<string, unknown>, dir: Direction): CSSProperties {
+  const { side } = d as { side?: number };
+  if (!side) return {};
+  const size = `calc(${side}px / var(--card-scale, 1))`;
+  return dir === 'LR' ? { height: size } : { width: size };
+}
+
+/**
+ * A card's belt handles, one per port, where the layout put them. Belts side by side go in through a handle as wide
+ * as they are, so they run in parallel into the card.
+ */
+function Ports({ data: d }: { data: Record<string, unknown> }) {
+  const dir = useContext(Flow);
+  const { ports } = d as { ports?: Port[] };
+  return (
+    <>
+      {ports?.map((p) => (
+        <Handle
+          key={p.id}
+          id={p.id}
+          type={p.type}
+          position={p.type === 'target' ? inSide(dir) : outSide(dir)}
+          style={{
+            ...(dir === 'LR' ? { top: p.offset } : { left: p.offset }),
+            ...(p.size ? (dir === 'LR' ? { height: p.size } : { width: p.size }) : {}),
+          }}
+        />
+      ))}
+    </>
+  );
+}
 
 /** Extractor counts per raw resource, shown on the ore/fluid source nodes. */
 const Extraction = createContext<Map<string, ExtractionUse>>(new Map());
@@ -144,14 +184,6 @@ function GroupsBadge({ use }: { use: MachineNodeData['use'] }) {
   );
 }
 
-/** A card's end for belts: as wide as the belts side by side that meet it, so they go in parallel. */
-function PortHandle({ type, lanes }: { type: 'source' | 'target'; lanes?: number }) {
-  const dir = useContext(Flow);
-  const length = lanes && lanes > 1 ? lanes * LANE_PITCH : undefined;
-  const style = length ? (dir === 'TB' ? { width: length } : { height: length }) : undefined;
-  return <Handle type={type} position={type === 'target' ? inSide(dir) : outSide(dir)} style={style} />;
-}
-
 /** Which of a split line's groups this card is: "2/3". */
 function GroupTag({ group }: { group: MachineNodeData['group'] }) {
   const { t } = useT();
@@ -166,16 +198,21 @@ function GroupTag({ group }: { group: MachineNodeData['group'] }) {
 /** A row of generators: the strip names the fuel and what they put on the grid, the building below. */
 function GeneratorNode({ id, data: d, selected }: NodeProps) {
   const { name, num } = useT();
-  const { use, generation = 0, ports, group } = d as MachineNodeData;
+  const { use, generation = 0, group } = d as MachineNodeData;
   const faded = useFaded(id);
+  const dir = useContext(Flow);
   const gen = generatorById.get(use.recipe.machine);
   const fuel = use.recipe.inputs.find((i) => data.items[i.item]?.energy)?.item;
   return (
     <div
       className={`machine-node power gen-${gen?.kind ?? 'fuel'} ${faded ? 'faded' : ''} ${selected ? 'selected' : ''}`}
-      style={{ ['--run-extra' as string]: runExtra(use), ...(use.shards > 0 ? { ['--mod-bar' as string]: 'var(--shard)' } : {}) }}
+      style={{
+        ['--run-extra' as string]: runExtra(use),
+        ...(use.shards > 0 ? { ['--mod-bar' as string]: 'var(--shard)' } : {}),
+        ...sideStyle(d, dir),
+      }}
     >
-      <PortHandle type="target" lanes={ports?.in} />
+      <Ports data={d} />
       <div className="machine-strip">
         <Icon id={fuel ?? use.recipe.machine} size={30} className="strip-icon" />
         <span className="machine-product">{fuel ? name(data.items[fuel]) : name(gen)}</span>
@@ -197,7 +234,6 @@ function GeneratorNode({ id, data: d, selected }: NodeProps) {
           </span>
         </span>
       </div>
-      <PortHandle type="source" lanes={ports?.out} />
     </div>
   );
 }
@@ -205,18 +241,23 @@ function GeneratorNode({ id, data: d, selected }: NodeProps) {
 function MachineNode(props: NodeProps) {
   const { id, data: d, selected } = props;
   const { name, num } = useT();
-  const { use, split, part, ports, group } = d as MachineNodeData;
+  const { use, split, part, group } = d as MachineNodeData;
   const { recipe } = use;
   const faded = useFaded(id);
+  const dir = useContext(Flow);
   const done = useContext(Built).built.has(recipe.id);
   if (recipe.kind === 'power') return <GeneratorNode {...props} />;
   const bar = modBar(use.shards, use.sloops);
   return (
     <div
       className={`machine-node ${recipe.kind} ${faded ? 'faded' : ''} ${selected ? 'selected' : ''} ${done ? 'done' : ''}`}
-      style={{ ['--run-extra' as string]: cardExtra(use, split ?? part), ...(bar ? { ['--mod-bar' as string]: bar } : {}) }}
+      style={{
+        ['--run-extra' as string]: cardExtra(use, split ?? part),
+        ...(bar ? { ['--mod-bar' as string]: bar } : {}),
+        ...sideStyle(d, dir),
+      }}
     >
-      <PortHandle type="target" lanes={ports?.in} />
+      <Ports data={d} />
       {/* The in-game build menu look: a coloured strip naming what it makes, the building and its draw below. */}
       <div className="machine-strip">
         <Icon id={recipe.outputs[0].item} size={30} className="strip-icon" />
@@ -244,7 +285,6 @@ function MachineNode(props: NodeProps) {
           {part && <SplitTo part={part} />}
         </span>
       </div>
-      <PortHandle type="source" lanes={ports?.out} />
     </div>
   );
 }
@@ -324,8 +364,9 @@ function PoolToggle({ item }: { item: string }) {
 
 function EndpointNode({ id, data: d }: NodeProps) {
   const { name, num, t } = useT();
-  const { kind, item, rate, line, ports } = d as EndpointNodeData;
+  const { kind, item, rate, line } = d as EndpointNodeData;
   const faded = useFaded(id);
+  const dir = useContext(Flow);
   const factoryMode = useStore((s) => s.mode === 'factory');
   const ex = useContext(Extraction).get(item);
   const links = useContext(Links);
@@ -338,13 +379,12 @@ function EndpointNode({ id, data: d }: NodeProps) {
       ? t('fromFactoryLabel', { name: source })
       : { raw: t('rawInput'), supply: t('onHand'), missing: t('bringIn'), target: t('output'), surplus: t('surplus') }[kind];
   const it = data.items[item];
-  const feeds = kind === 'raw' || kind === 'supply' || kind === 'missing';
   return (
     <div
       className={`endpoint-node ${kind} ${faded ? 'faded' : ''}`}
-      style={it.form !== 'solid' ? { ['--fluid-color' as string]: pipeColor(it) ?? 'var(--fluid)' } : undefined}
+      style={{ ...(it.form !== 'solid' ? { ['--fluid-color' as string]: pipeColor(it) ?? 'var(--fluid)' } : {}), ...sideStyle(d, dir) }}
     >
-      {!feeds && <PortHandle type="target" lanes={ports?.in} />}
+      <Ports data={d} />
       <Slot id={item} size={60} tone={kind === 'target' ? 'target' : 'default'} />
       <span className="endpoint-text">
         <span className="endpoint-kind">{label}</span>
@@ -378,7 +418,6 @@ function EndpointNode({ id, data: d }: NodeProps) {
       </span>
       {kind === 'surplus' && factoryMode && <SurplusMake item={item} rate={rate} line={line} />}
       {kind === 'target' && factoryMode && <PoolToggle item={item} />}
-      {feeds && <PortHandle type="source" lanes={ports?.out} />}
     </div>
   );
 }
@@ -387,14 +426,13 @@ function EndpointNode({ id, data: d }: NodeProps) {
 function PowerNode({ id, data: d }: NodeProps) {
   const { t, num } = useT();
   const { kind, label, mw, tone, boost, balance = 0 } = d as PowerNodeData;
-  const dir = useContext(Flow);
   const faded = useFaded(id);
-  const hasOut = useFlowStore((s) => s.edges.some((e) => e.source === id));
+  const dir = useContext(Flow);
   if (kind === 'grid') {
     const short = balance < -0.5;
     return (
-      <div className={`power-node grid ${short ? 'short' : ''} ${faded ? 'faded' : ''}`}>
-        <Handle type="target" position={inSide(dir)} />
+      <div className={`power-node grid ${short ? 'short' : ''} ${faded ? 'faded' : ''}`} style={sideStyle(d, dir)}>
+        <Ports data={d} />
         <span className="grid-head">
           <Glyph name="bolt" size={18} />
           {t('powerGrid')}
@@ -407,13 +445,12 @@ function PowerNode({ id, data: d }: NodeProps) {
           <span className={short ? 'bad' : 'good'}>{short ? t('shortBy', { mw: num(-balance) }) : t('spareBy', { mw: num(balance) })}</span>
           {!!boost && <span className="grid-boost">{t('boostTag', { boost: num(boost * 100) })}</span>}
         </span>
-        {hasOut && <Handle type="source" position={outSide(dir)} />}
       </div>
     );
   }
   return (
-    <div className={`power-node consumer ${tone ?? ''} ${faded ? 'faded' : ''}`}>
-      <Handle type="target" position={inSide(dir)} />
+    <div className={`power-node consumer ${tone ?? ''} ${faded ? 'faded' : ''}`} style={sideStyle(d, dir)}>
+      <Ports data={d} />
       <Glyph name={tone === 'chain' || tone === 'out' ? 'bolt' : tone === 'other' ? 'sliders' : 'factory'} size={26} />
       <span className="consumer-text">
         <span className="consumer-kind">
@@ -429,6 +466,33 @@ function PowerNode({ id, data: d }: NodeProps) {
   );
 }
 
+/** A belt between handles once a machine has been moved off its laid-out spot, drawn in the chosen belt style. */
+function handlePath(
+  routing: EdgeRouting,
+  e: Pick<EdgeProps, 'sourceX' | 'sourceY' | 'targetX' | 'targetY' | 'sourcePosition' | 'targetPosition'>,
+): [string, number, number, Arrival] {
+  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition } = e;
+  const at = { x: targetX, y: targetY };
+  if (routing === 'POLYLINE') {
+    const [p, x, y] = getStraightPath({ sourceX, sourceY, targetX, targetY });
+    return [p, x, y, arrival([{ x: sourceX, y: sourceY }, at])];
+  }
+  const [p, x, y] =
+    routing === 'ORTHOGONAL'
+      ? getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 12 })
+      : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  // Steps and curves both come into the handle square to its side.
+  return [p, x, y, { at, dir: INTO[targetPosition] }];
+}
+
+/** The way into a card through a handle on each of its sides. */
+const INTO: Record<Position, { x: number; y: number }> = {
+  [Position.Left]: { x: 1, y: 0 },
+  [Position.Right]: { x: -1, y: 0 },
+  [Position.Top]: { x: 0, y: 1 },
+  [Position.Bottom]: { x: 0, y: -1 },
+};
+
 /** A power line: a dark cable with current pulsing along its core. */
 function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data: d }: EdgeProps) {
   const { num } = useT();
@@ -436,20 +500,13 @@ function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourceP
   const zoom = useFlowStore(zoomSelector);
   const still = useFlowStore(stillSelector);
   const labels = useStore((s) => s.settings.beltLabels);
+  const routing = useStore((s) => s.settings.edgeRouting);
   const { mw, route } = d as PowerEdgeData;
-  const dir = useContext(Flow);
   const from = useInternalNode(source)?.internals.positionAbsolute;
   const to = useInternalNode(target)?.internals.positionAbsolute;
-  let path: string;
-  let lx: number;
-  let ly: number;
-  if (route && !moved(from, route.from) && !moved(to, route.to)) {
-    path = routePath([{ x: sourceX, y: sourceY }, ...route.points, { x: targetX, y: targetY }], dir);
-    lx = route.label.x;
-    ly = route.label.y;
-  } else {
-    [path, lx, ly] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-  }
+  const [path, lx, ly, end] = edgePath(route, from, to, () =>
+    handlePath(routing, { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition }),
+  );
   const lit = focus.nodes !== undefined && (focus.nodes.has(source) || focus.nodes.has(target));
   const faded = focus.nodes !== undefined && !lit;
   const state = `${faded ? 'faded' : ''} ${lit ? 'lit' : ''} ${still ? 'still' : ''}`;
@@ -459,6 +516,7 @@ function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourceP
       <g className={`power-edge ${state}`}>
         <path d={path} className="cable" />
         <path d={path} className="cable-core" />
+        <polygon points={arrowHead(end, 16, 24)} className="cable-arrow" />
       </g>
       {showLabel && (
         <EdgeLabelRenderer>
@@ -476,85 +534,6 @@ function PowerEdge({ source, target, sourceX, sourceY, targetX, targetY, sourceP
   );
 }
 
-/** Radius of a belt's turn where a run across the flow meets one along it. */
-const TURN = 36;
-
-/**
- * A belt through the route's bends. Stretches that mostly go along the flow leave and arrive straight along it, so
- * belts never overshoot or loop where several meet at one input. Stretches that mostly go across it run straight,
- * with a rounded turn wherever they meet an along stretch. At a machine's handle the belt leaves (or arrives) along
- * the flow and eases into the run across, so belts sharing a handle fan out from it like a splitter.
- */
-export function routePath(pts: Point[], dir: Direction): string {
-  // In (u, v): u along the flow, v across it, so one rule serves both directions.
-  type V = [number, number];
-  const uv = (p: Point): V => (dir === 'LR' ? [p.x, p.y] : [p.y, p.x]);
-  const xy = ([u, v]: V) => (dir === 'LR' ? `${u},${v}` : `${v},${u}`);
-  const add = (a: V, b: V, k = 1): V => [a[0] + b[0] * k, a[1] + b[1] * k];
-  const P = pts.map(uv);
-  const n = P.length - 1;
-  const delta = (i: number): V => [P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]];
-  const len = (i: number) => Math.hypot(...delta(i));
-  // Too little room along the flow to curve: a run across it.
-  const across = Array.from({ length: n }, (_, i) => {
-    const [du, dv] = delta(i);
-    return Math.abs(du) < Math.min(2 * TURN, Math.abs(dv));
-  });
-  /** Which way stretch i heads where it starts and ends. */
-  const heading = (i: number): V => {
-    if (!across[i]) return [Math.sign(delta(i)[0]) || 1, 0];
-    const l = len(i) || 1;
-    return [delta(i)[0] / l, delta(i)[1] / l];
-  };
-  const room = (i: number) => (across[i] ? len(i) : Math.abs(delta(i)[0])) / 2;
-  // A rounded corner at each point inside the route where an along stretch meets an across one.
-  const turn = (k: number) => (k > 0 && k < n && across[k - 1] !== across[k] ? Math.min(TURN, room(k - 1), room(k)) : 0);
-  /** How far across the ease at a handle reaches: a little more than it goes along, within half the run. */
-  const ease = (i: number) => {
-    const [du, dv] = delta(i);
-    return Math.min(Math.abs(dv) / 2, Math.max(1.5 * Math.abs(du), TURN));
-  };
-
-  let d = `M${xy(P[0])}`;
-  let from = P[0];
-  for (let i = 0; i < n; i++) {
-    const k = i + 1;
-    const r = turn(k);
-    const [du, dv] = delta(i);
-    const side = Math.sign(dv) || 1;
-    if (across[i] && i === 0) {
-      // Leave the handle along the flow and ease into the run across: a quarter curve, then straight.
-      // A run that is both the first and the last keeps half its way along for easing into the far handle.
-      const go = i === n - 1 ? du / 2 : du;
-      const e = ease(i) / (i === n - 1 ? 2 : 1);
-      const to: V = [P[0][0] + go, P[0][1] + side * e];
-      d += ` C${xy([P[0][0] + 0.55 * go, P[0][1]])} ${xy([to[0], to[1] - side * 0.55 * e])} ${xy(to)}`;
-      from = to;
-    }
-    const last = across[i] && i === n - 1;
-    const corner = P[k];
-    let to = r ? add(corner, heading(i), -r) : corner;
-    const easeIn = ease(i) / (i === 0 ? 2 : 1);
-    if (last) to = [from[0], P[n][1] - side * easeIn];
-    if (across[i]) d += ` L${xy(to)}`;
-    else {
-      const mid = (from[0] + to[0]) / 2;
-      d += ` C${xy([mid, from[1]])} ${xy([mid, to[1]])} ${xy(to)}`;
-    }
-    if (last) {
-      // Ease out of the run across into the handle, arriving along the flow.
-      const gap = P[n][0] - to[0];
-      d += ` C${xy([to[0], to[1] + side * 0.55 * easeIn])} ${xy([P[n][0] - 0.55 * gap, P[n][1]])} ${xy(P[n])}`;
-      from = P[n];
-    } else if (r) {
-      const out = add(corner, heading(k), r);
-      d += ` Q${xy(corner)} ${xy(out)}`;
-      from = out;
-    } else from = to;
-  }
-  return d;
-}
-
 /** What a node is called on a clicked belt's label: the part a machine makes, or the item at an endpoint. */
 function nodeName(node: unknown, name: (x: { name: string }) => string): string {
   const d = (node ?? {}) as { use?: MachineNodeData['use']; item?: string; label?: string };
@@ -563,8 +542,6 @@ function nodeName(node: unknown, name: (x: { name: string }) => string): string 
   return item ? name(item) : (d.label ?? '');
 }
 
-const moved = (a: Point | undefined, b: Point) => !a || Math.abs(a.x - b.x) > 0.5 || Math.abs(a.y - b.y) > 0.5;
-
 /** A conveyor belt (rails, bed, moving slats) or a pipe (casing, flowing fluid) along the edge. */
 function FlowEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data: d }: EdgeProps) {
   const { name, num, t } = useT();
@@ -572,45 +549,28 @@ function FlowEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sour
   const zoom = useFlowStore(zoomSelector);
   const still = useFlowStore(stillSelector);
   const labels = useStore((s) => s.settings.beltLabels);
-  const square = useStore((s) => s.settings.autoBelts === 'square');
+  const routing = useStore((s) => s.settings.edgeRouting);
   const oneColor = useStore((s) => s.settings.beltColors === 'one');
   const { item, rate, transport, lanes, route, wide } = d as FlowEdgeData;
   const it = data.items[item];
-  const dir = useContext(Flow);
   const fromNode = useInternalNode(source);
   const toNode = useInternalNode(target);
   const from = fromNode?.internals.positionAbsolute;
   const to = toNode?.internals.positionAbsolute;
   const pick = useContext(PickEdge);
   const picked = focus.edge === id;
-  let path: string;
-  let lx: number;
-  let ly: number;
-  if (route && !moved(from, route.from) && !moved(to, route.to)) {
-    // As laid out: follow the route around the machines, through the label's reserved spot.
-    if ((square || route.loop) && route.square) {
-      // Straight runs with square turns, as on the Manual floor, the label on the longest run.
-      const sq = squarePath({ x: sourceX, y: sourceY }, route.square, { x: targetX, y: targetY }, dir === 'TB');
-      path = sq.path;
-      [lx, ly] = route.labelAt ? [route.labelAt.x, route.labelAt.y] : longestRunMid(sq.runs);
-    } else {
-      path = routePath([{ x: sourceX, y: sourceY }, ...route.points, { x: targetX, y: targetY }], dir);
-      lx = route.label.x;
-      ly = route.label.y;
-    }
-  } else if (square) {
-    [path, lx, ly] = getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: SQUARE_TURN });
-  } else {
-    [path, lx, ly] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-  }
+  // As laid out: follow the route around the machines, through the label's reserved spot.
+  const [path, lx, ly, end] = edgePath(route, from, to, () =>
+    handlePath(routing, { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition }),
+  );
   // Side by side lines widen the belt, up to a point: past a few, the label's "123×" says how many.
   const drawn = Math.min(lanes, MAX_LANES);
   const lit = focus.edge ? picked : focus.nodes !== undefined && (focus.nodes.has(source) || focus.nodes.has(target));
   const faded = (focus.nodes !== undefined || focus.edge !== undefined) && !lit;
   const showLabel = labels === 'always' || lit || (labels === 'auto' && zoom !== 'far');
   const state = `${faded ? 'faded' : ''} ${lit ? 'lit' : ''} ${still ? 'still' : ''}`;
-  const { body, color: tierColor, ink } = beltStroke({ path, item, transport, lanes: drawn, state, oneColor, wide });
-  // A belt running back against the flow: a blue road under it, a "back to" label, and a mark where it climbs to its input.
+  const { body, color: tierColor, ink } = beltStroke({ path, item, transport, lanes: drawn, state, oneColor, wide, end });
+  // A belt running back against the flow: a blue road under it, a "back to" label, and a mark where it turns into its input.
   const loop = !!route?.loop;
   const entry = loop && !moved(from, route.from) && !moved(to, route.to) ? route.loop : undefined;
 
@@ -724,8 +684,8 @@ function LogisticNode({ id, data: d }: NodeProps) {
 const nodeTypes = { machine: MachineNode, endpoint: EndpointNode, power: PowerNode, line: LineTag, logistic: LogisticNode };
 const edgeTypes = { flow: FlowEdge, power: PowerEdge };
 
-/** The direction switch (left to right or top to bottom) and fit to screen. */
-function FloorControls() {
+/** The floor's own buttons; `relayout` puts dragged machines back where the layout had them. */
+function FloorControls({ relayout }: { relayout?: () => void }) {
   const { t } = useT();
   const flow = useReactFlow();
   const dir = useContext(Flow);
@@ -780,6 +740,14 @@ function FloorControls() {
         </span>
         <span className="fit-label">{t('fit')}</span>
       </button>
+      {relayout && (
+        <button type="button" className="floor-button" title={t('relayout')} onClick={relayout}>
+          <span className="fit-icon" aria-hidden>
+            ↺
+          </span>
+          <span className="fit-label">{t('relayout')}</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -864,12 +832,14 @@ const groupOf = (nodeId: string) => nodeId.replace(/#\d+$/, '');
 // Camera survives re-solves that keep the same machines (e.g. tweaking a clock speed).
 let camera: { sig: string; viewport?: Viewport } = { sig: '' };
 
-function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig: string; dir: Direction }) {
+function Canvas({ nodes, edges, sig, dir, relayout }: { nodes: Node[]; edges: Edge[]; sig: string; dir: Direction; relayout: () => void }) {
   const inspect = useStore((s) => s.inspect);
   const set = useStore((s) => s.set);
   const gridLines = useStore((s) => s.settings.gridLines);
   const [hover, setHover] = useState<string>();
   const [edge, setEdge] = useState<string>();
+  // Offer to lay the floor out again only once a machine has been moved off its spot.
+  const [dragged, setDragged] = useState(false);
   const [restore] = useState(() => (camera.sig === sig ? camera.viewport : undefined));
   // A huge factory may need to zoom out past the usual floor to fit the screen whole.
   const [minZoom] = useState(() => {
@@ -952,6 +922,7 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
           nodesDraggable={!coarse}
           snapToGrid
           snapGrid={[GRID, GRID]}
+          onNodeDragStop={() => setDragged(true)}
           edgesFocusable={false}
           minZoom={minZoom}
           maxZoom={2}
@@ -996,12 +967,15 @@ function Canvas({ nodes, edges, sig, dir }: { nodes: Node[]; edges: Edge[]; sig:
           {/* Foundation grid: minor lines every 8 m tile, a heavier seam every 4 tiles. */}
           {gridLines && <Background id="minor" variant={BackgroundVariant.Lines} gap={GRID} lineWidth={1} color="#2f2f2f" />}
           {gridLines && <Background id="major" variant={BackgroundVariant.Lines} gap={GRID * 4} lineWidth={1} color="#3b3b3b" />}
-          <FloorControls />
+          <FloorControls relayout={dragged ? relayout : undefined} />
         </ReactFlow>
       </PickEdge.Provider>
     </Focus.Provider>
   );
 }
+
+/** A laid-out floor as shown: remounted by `key`, its camera kept across layouts with the same `sig`. */
+type Shown = Floor & { key: number; sig: string };
 
 export function GraphView({
   result,
@@ -1021,38 +995,87 @@ export function GraphView({
   const text = useStore((s) => s.settings.textScale);
   const splitLines = useStore((s) => s.settings.splitLines);
   const spacing = useStore((s) => s.settings.spacing);
-  const squareBelts = useStore((s) => s.settings.autoBelts === 'square');
   const splitters = useStore((s) => s.settings.autoSplitters);
   const beltSplit = useStore((s) => s.settings.beltSplit);
   const pipeSplit = useStore((s) => s.settings.pipeSplit);
-  // Uncontrolled flow remounted per solve: nodes stay draggable, and each new solve lays out fresh.
-  const { nodes, edges, dir, key, sig } = useMemo(() => {
+  const placement = useStore((s) => s.settings.layoutPlacement);
+  const routing = useStore((s) => s.settings.edgeRouting);
+  const effort = useStore((s) => s.settings.layoutEffort);
+  const gridLines = useStore((s) => s.settings.gridLines);
+  const { t } = useT();
+  // Everything the floor is built and laid out from, besides the solve itself: the floor last laid out with the same
+  // comes straight back when you return to it.
+  const settingsKey = JSON.stringify([
+    tier,
+    chosen,
+    scale,
+    text,
+    spacing,
+    splitLines,
+    splitters,
+    beltSplit,
+    pipeSplit,
+    placement,
+    routing,
+    effort,
+    consumers?.map((c) => [c.id, c.mw]),
+  ]);
+  const built = useMemo(
+    () =>
+      buildGraph(result, tier, {
+        scale,
+        text,
+        consumers,
+        splitLines,
+        splitters,
+        split: {
+          belt: data.belts.find((b) => b.id === beltSplit)?.rate,
+          pipe: data.pipes.find((p) => p.id === pipeSplit)?.rate,
+        },
+      }),
+    [result, tier, scale, text, consumers, splitLines, splitters, beltSplit, pipeSplit],
+  );
+  // Uncontrolled flow remounted per layout: nodes stay draggable, and each new solve lays out fresh. The last floor
+  // stays on screen while the next one is laid out, and a layout overtaken by a newer one is dropped.
+  const [take] = useState(() => latestOnly<Shown | undefined>());
+  const [floor, setFloor] = useState(() => recallFloor<Shown>(result, settingsKey));
+  // Busy from the first render when there is nothing to show yet, so nothing waiting on the floor goes ahead early.
+  const [pending, setPending] = useState(() => !recallFloor(result, settingsKey));
+  // Bumped to remount the floor from its layout, dropping wherever machines were dragged.
+  const [redo, setRedo] = useState(0);
+  useEffect(() => {
+    const kept = recallFloor<Shown>(result, settingsKey);
     const box = document.querySelector('.floor-view')?.getBoundingClientRect();
-    const g = buildGraph(result, tier, {
-      dir: chosen,
-      box: box && { width: box.width, height: box.height },
-      scale,
-      text,
-      spacing,
-      consumers,
-      splitLines,
-      squareBelts,
-      splitters,
-      split: {
-        belt: data.belts.find((b) => b.id === beltSplit)?.rate,
-        pipe: data.pipes.find((p) => p.id === pipeSplit)?.rate,
-      },
+    const opts = { dir: chosen, box: box && { width: box.width, height: box.height }, scale, text, spacing, placement, routing, effort };
+    setPending(!kept);
+    // Through `take` even when kept, so a layout still running for other settings can't replace it.
+    take((isStale) =>
+      kept
+        ? Promise.resolve(kept)
+        : layoutGraph(built, opts, layoutInBackground, isStale)
+            .catch((err) => {
+              // Dropped for a newer layout: nothing to show, the newer one will be.
+              if (isStale()) return undefined;
+              console.error('Floor layout failed; showing a plain grid', err);
+              return gridLayout(built, chosen ?? 'LR');
+            })
+            .then((g) => {
+              if (!g) return undefined;
+              const sig =
+                g.nodes
+                  .map((n) => n.id)
+                  .sort()
+                  .join('|') + g.dir;
+              const shown = { ...g, key: ++solveCount, sig };
+              rememberFloor(result, settingsKey, shown);
+              return shown;
+            }),
+    ).then((shown) => {
+      if (!shown) return;
+      setFloor(shown);
+      setPending(false);
     });
-    return {
-      ...g,
-      key: ++solveCount,
-      sig:
-        g.nodes
-          .map((n) => n.id)
-          .sort()
-          .join('|') + g.dir,
-    };
-  }, [result, tier, chosen, scale, text, spacing, consumers, splitLines, squareBelts, splitters, beltSplit, pipeSplit]);
+  }, [result, settingsKey, built, chosen, scale, text, spacing, placement, routing, effort, take]);
   const exMap = useMemo(() => new Map(extraction.map((u) => [u.item, u])), [extraction]);
   // Ticking a machine built changes nothing the layout is made from, so the floor isn't laid out again for it.
   const ticked = usePlan().built;
@@ -1064,18 +1087,31 @@ export function GraphView({
     }),
     [consumers, ticked, updatePlan],
   );
+  // Busy like solving, so the floor says why it's empty or about to change.
+  const status = pending && <div className="busy laying-out">{t('layingOut')}</div>;
+  if (!floor)
+    return (
+      <>
+        {gridLines && <div className="floor-grid" />}
+        {status}
+      </>
+    );
+  const { nodes, edges, dir, key, sig } = floor;
   if (!consumers) shownDir = dir;
   return (
-    <Extraction.Provider value={exMap}>
-      <Links.Provider value={links}>
-        <Flow.Provider value={dir}>
-          <Built.Provider value={builtNow}>
-            <ReactFlowProvider key={key}>
-              <Canvas nodes={nodes} edges={edges} sig={sig} dir={dir} />
-            </ReactFlowProvider>
-          </Built.Provider>
-        </Flow.Provider>
-      </Links.Provider>
-    </Extraction.Provider>
+    <>
+      <Extraction.Provider value={exMap}>
+        <Links.Provider value={links}>
+          <Flow.Provider value={dir}>
+            <Built.Provider value={builtNow}>
+              <ReactFlowProvider key={`${key}.${redo}`}>
+                <Canvas nodes={nodes} edges={edges} sig={sig} dir={dir} relayout={() => setRedo((r) => r + 1)} />
+              </ReactFlowProvider>
+            </Built.Provider>
+          </Flow.Provider>
+        </Links.Provider>
+      </Extraction.Provider>
+      {status}
+    </>
   );
 }

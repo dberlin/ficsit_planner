@@ -36,7 +36,7 @@ export async function modelFromSolve(
   /** Recipes ticked built on the Auto floor: their cards come ticked too. */
   built: string[] = [],
 ): Promise<Model> {
-  const g = buildGraph(result, tier, { dir: 'LR', splitLines: 'each' });
+  const g = buildGraph(result, tier, { splitLines: 'each' });
   let seq = 1;
   const id = () => (seq++).toString(36);
   const nodes: MNode[] = [];

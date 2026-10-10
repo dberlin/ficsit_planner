@@ -3,6 +3,8 @@ import loadHighs, { type Highs } from 'highs';
 import { data } from '../src/lib/data';
 import { DEFAULT_EXTRACTION } from '../src/lib/extraction';
 import { buildGraph } from '../src/lib/graph';
+import { layoutGraph } from '../src/lib/layout';
+import { testEngine } from './elkEngine';
 import { calcModel } from '../src/lib/model/calc';
 import { adaptModel } from '../src/lib/model/calc/adapter';
 import { modelFromSolve } from '../src/lib/model/fromAuto';
@@ -86,10 +88,10 @@ describe('separate lines', () => {
     expect(solve(highs, input({ targets, lines: [COMPUTER], resourceCaps: { Desc_OreIron_C: need * 1.01 } })).lines).toHaveLength(2);
   });
 
-  test('the factory graph stands each line apart: ids of their own, a tag over each, no card on another', () => {
+  test('the factory graph stands each line apart: ids of their own, a tag over each, no card on another', async () => {
     const apart = solve(highs, input({ targets, lines: [COMPUTER] }));
     for (const dir of ['LR', 'TB'] as const) {
-      const g = buildGraph(apart, 9, { dir });
+      const g = await layoutGraph(buildGraph(apart, 9), { dir, effort: 'fast' }, testEngine);
       expect(g.nodes.filter((n) => n.type === 'line')).toHaveLength(2);
       const ids = new Set(g.nodes.map((n) => n.id));
       expect(ids.size).toBe(g.nodes.length);

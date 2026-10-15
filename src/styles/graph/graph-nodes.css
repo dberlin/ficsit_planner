@@ -1,8 +1,8 @@
 /* ---------- Graph nodes ---------- */
 
 .react-flow__handle {
-  width: 10px;
-  height: 18px;
+  width: 8px;
+  height: 12px;
   border-radius: 0;
   border: 0;
   background: var(--line-2);
@@ -11,8 +11,8 @@
 /* Phones run the line top to bottom; the same handle lies on its side. */
 .react-flow__handle-top,
 .react-flow__handle-bottom {
-  width: 18px;
-  height: 10px;
+  width: 12px;
+  height: 8px;
 }
 
 .react-flow__node-machine {

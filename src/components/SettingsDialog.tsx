@@ -8,9 +8,11 @@ import {
   clampSetting,
   DEFAULT_COLORS,
   DEFAULT_SETTINGS,
+  EFFORTS,
   FONTS,
   type LIMITS,
   type PanelSide,
+  PLACEMENTS,
   type Settings,
   sameSettings,
 } from '../lib/settings';
@@ -448,8 +450,9 @@ function FloorSection() {
           label={t('autoBelts')}
           value={s.autoBelts}
           options={[
-            { id: 'curve', label: t('beltCurve') },
             { id: 'square', label: t('beltSquare') },
+            { id: 'curve', label: t('beltCurve') },
+            { id: 'straight', label: t('beltStraight') },
           ]}
           onChange={(v) => set({ autoBelts: v })}
         />
@@ -501,6 +504,23 @@ function FloorSection() {
           value={s.pipeSplit}
           options={[{ id: 'off', label: t('noSplit') }, ...data.pipes.map((p) => ({ id: p.id, label: p.name }))]}
           onChange={(v) => set({ pipeSplit: v })}
+        />
+      </Row>
+      <Row label={t('layoutPlacement')} hint={t('layoutPlacementHint')}>
+        <Choice
+          label={t('layoutPlacement')}
+          wrap
+          value={s.layoutPlacement}
+          options={PLACEMENTS.map((p) => ({ id: p, label: t(`placement_${p}`) }))}
+          onChange={(v) => set({ layoutPlacement: v })}
+        />
+      </Row>
+      <Row label={t('layoutEffort')} hint={t('layoutEffortHint')}>
+        <Choice
+          label={t('layoutEffort')}
+          value={s.layoutEffort}
+          options={EFFORTS.map((e) => ({ id: e, label: t(`effort_${e}`) }))}
+          onChange={(v) => set({ layoutEffort: v })}
         />
       </Row>
     </>

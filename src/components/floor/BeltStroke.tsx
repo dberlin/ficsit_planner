@@ -3,6 +3,7 @@ import { BELT_COLORS } from '../../lib/belts';
 import { data, type Transport } from '../../lib/data';
 import { LANE_PITCH } from '../../lib/graph';
 import { pipeColor } from '../../lib/pipe';
+import { type Arrival, arrowHead } from '../../lib/routes';
 import { inkOn } from '../../lib/settings';
 
 const beltIndex = (id: string) =>
@@ -150,7 +151,8 @@ export function BeltFlow({
 
 /**
  * A conveyor belt (rails, bed, chevrons, a moving strip) or a pipe (casing, flowing fluid) along a path, as both floors draw them.
- * Side by side lines widen it. Returns the drawing and the colour of its tier, for the label's Mk badge.
+ * Side by side lines widen it, and `end` puts an arrowhead where it arrives. Returns the drawing and the colour of its
+ * tier, for the label's Mk badge.
  */
 export function beltStroke({
   path,
@@ -161,6 +163,7 @@ export function beltStroke({
   oneColor = false,
   wide,
   pitch: apartBy = LANE_PITCH,
+  end,
 }: {
   path: string;
   item: string;
@@ -172,19 +175,25 @@ export function beltStroke({
   wide?: { from: boolean; to: boolean };
   /** How far apart the belts side by side run, centre to centre. */
   pitch?: number;
+  /** Where it arrives and which way it heads there, for its arrowhead. */
+  end?: Arrival;
 }): { body: ReactNode; color: string; ink?: string } {
   const it = data.items[item];
+  const arrow = (width: number, className: string, fill?: string) =>
+    end && <polygon points={arrowHead(end, width + 8, width * 1.6 + 10)} className={className} style={fill ? { fill } : undefined} />;
   if (it && it.form !== 'solid') {
     const mk = pipeIndex(transport.id);
     const w = mk === 0 ? 9 : 12;
     const color = pipeColor(it) ?? 'var(--fluid)';
+    const casing = w + 4 * (lanes - 1);
     return {
       color,
       ink: pipeColor(it) ? inkOn(color) : undefined,
       body: (
         <g className={`pipe-edge ${state}`}>
-          <path d={path} className="pipe-casing" style={{ strokeWidth: w + 4 * (lanes - 1) }} />
+          <path d={path} className="pipe-casing" style={{ strokeWidth: casing }} />
           <path d={path} className="pipe-fluid" style={{ stroke: color, strokeWidth: w - 4 }} />
+          {arrow(casing, 'pipe-arrow', color)}
         </g>
       ),
     };
@@ -213,6 +222,7 @@ export function beltStroke({
             // biome-ignore lint/suspicious/noArrayIndexKey: as above.
             <BeltFlow key={i} path={d} width={Math.max(2, across - 4)} straight />
           ))}
+          {arrow((lanes - 1) * apartBy + across, 'belt-arrow')}
         </g>
       ),
     };
@@ -237,6 +247,7 @@ export function beltStroke({
           </g>
         ))}
         <BeltFlow path={path} width={bed} lanes={lanes} pitch={pitch} slats={lanes === 1} />
+        {arrow(w, 'belt-arrow')}
       </g>
     ),
   };

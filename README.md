@@ -175,7 +175,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for code style and what to check before a
 
 After solving, fractional machine counts are rounded up to buildings you can actually place, each with its own
 clock. `src/lib/graph.ts` then matches each item's producers to its consumers greedily, largest first, which keeps
-the belt count low. dagre lays the graph out left to right, or top to bottom on phones.
+the belt count low. `src/lib/layout.ts` lays the graph out with ELK, in background workers, left to right, or top to
+bottom on phones.
 
 ## Project layout
 
@@ -296,7 +297,7 @@ These parts are not the project's own work, so the GPL doesn't cover them:
   (names, recipes, numbers) belong to Coffee Stain Studios. They are included only so this free, non-commercial
   fan tool can work, and all rights to them stay with Coffee Stain. Satisfactory is a trademark of Coffee Stain
   Studios. This project is not affiliated with or endorsed by them.
-- **Dependencies** keep their own licenses. HiGHS, React, React Flow, dagre, zustand and Workbox are MIT, Leaflet
-  is BSD-2-Clause, and elkjs (the Manual floor's layout) is EPL-2.0 with GPL-3.0 as a secondary license. The Heebo, Poppins, Inter, Rajdhani and Barlow fonts are SIL Open Font License 1.1. CUE4Parse, which the icon extractor uses, is Apache-2.0. All of
+- **Dependencies** keep their own licenses. HiGHS, React, React Flow, zustand and Workbox are MIT, Leaflet
+  is BSD-2-Clause, and elkjs (the floors' layout) is EPL-2.0 with GPL-3.0 as a secondary license. The Heebo, Poppins, Inter, Rajdhani and Barlow fonts are SIL Open Font License 1.1. CUE4Parse, which the icon extractor uses, is Apache-2.0. All of
   them can be combined with GPLv3.
 - **World resource limits** come from [SatisfactoryTools](https://github.com/greeny/SatisfactoryTools), MIT.

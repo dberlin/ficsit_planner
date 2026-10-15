@@ -51,6 +51,8 @@ const DYNAMIC_PREFIXES = [
   'calc_',
   'calcHint_',
   'choose_',
+  'effort_',
+  'placement_',
   'guideLine_',
   'sort_',
   'extra_',

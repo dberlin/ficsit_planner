@@ -9,6 +9,26 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 - **Belt and pipe tiers on the floor:** Settings → Floor → Split for belts / Split for pipes splits each machine line
   into groups whose belts and pipes all fit the chosen tier, each group with its own clocks, power, shards and
   somersloops.
+- **Layout settings:** machine placement and layout effort, and Belt shape gains Straight beside Square and Curved.
+- **Arrows on the floor:** every belt, pipe and power line ends in an arrowhead pointing into the machine it feeds,
+  so belts running back against the flow read the right way.
+- **Lay out again:** once a machine has been dragged, a button beside Fit to screen puts every machine back where the
+  layout had it.
+
+### Fixed
+
+- **Dragging a machine** no longer turns its belts into curves: they follow the Belt shape setting (square, curved or
+  straight).
+
+### Changed
+
+- **The floor is laid out by ELK:** belts run at right angles around machines by default (Belt shape starts at
+  Square), each belt meets its machine at its own spot, and the layout tries several arrangements for the fewest
+  crossing belts. Laying out happens in the background, so big factories no longer pause the page. Splitters and
+  mergers keep their three ends, belts side by side still enter through an end as wide as they are, a belt running
+  back against the flow is still marked with its ↺, lines of their own still stand one after the other, and a factory
+  whose cards and belts are the same as before (a number changed) is placed again at once without laying it out.
+- **The Manual floor says "Laying out"** while converting a factory, Rebuild or Tidy up work, instead of "Solving".
 
 ## 0.13.35 — 2026-10-11
 

@@ -4,7 +4,7 @@ import { data, generatorById, recipeById } from './data';
 import { DEFAULT_EXTRACTION, type ExtractionSettings, MINERS, PURITIES, type Purity } from './extraction';
 import { POOL } from './pool';
 import { PLANT_NAMES, type Plant, type PlantSize, type SizeBy } from './power';
-import { clampSetting, DEFAULT_COLORS, DEFAULT_SETTINGS, FONTS, type Settings } from './settings';
+import { BELT_SHAPES, clampSetting, DEFAULT_COLORS, DEFAULT_SETTINGS, EFFORTS, FONTS, PLACEMENTS, type Settings } from './settings';
 import type { RecipeMod, Target } from './solver';
 import { CARRIERS, type Carrier } from './transport';
 import { cleanModel } from './model/sanitize';
@@ -244,7 +244,7 @@ export function cleanSettings(saved: unknown): Settings {
     uiScale: scale('uiScale'),
     spacing: scale('spacing'),
     beltLabels: oneOf(s.beltLabels, ['auto', 'always', 'never'] as const, d.beltLabels),
-    autoBelts: oneOf(s.autoBelts, ['curve', 'square'] as const, d.autoBelts),
+    autoBelts: oneOf(s.autoBelts, BELT_SHAPES, d.autoBelts),
     autoSplitters: s.autoSplitters === true,
     beltMotion: typeof s.beltMotion === 'boolean' ? s.beltMotion : d.beltMotion,
     gridLines: typeof s.gridLines === 'boolean' ? s.gridLines : d.gridLines,
@@ -252,6 +252,8 @@ export function cleanSettings(saved: unknown): Settings {
     beltColors: oneOf(s.beltColors, ['tier', 'one'] as const, d.beltColors),
     beltSplit: oneOf(s.beltSplit, ['off', ...data.belts.map((b) => b.id)], d.beltSplit),
     pipeSplit: oneOf(s.pipeSplit, ['off', ...data.pipes.map((p) => p.id)], d.pipeSplit),
+    layoutPlacement: oneOf(s.layoutPlacement, PLACEMENTS, d.layoutPlacement),
+    layoutEffort: oneOf(s.layoutEffort, EFFORTS, d.layoutEffort),
     colors,
     decimals: finite(s.decimals) ? Math.round(clampSetting('decimals', s.decimals as number)) : d.decimals,
     motion: oneOf(s.motion, ['system', 'reduce', 'full'] as const, d.motion),

@@ -73,9 +73,9 @@ export function Inspector({ result }: { result: SolveResult }) {
   };
   const groups = buildGroups(use, tier);
   const split = splitByDestination(use, flows, tier);
-  // A line with machines at different clocks (100% and one slower) has no one clock to show or move; the machine stepper is how it leaves that.
-  const locked = use.full === true && groupClocks(use.clocks).length > 1;
-  const clock = locked ? 1 : draft && draft.id === recipe.id && draft.from === use.clock ? draft.value : use.clock;
+  // A line with a single slower machine has no one clock to move; the machine stepper is how it leaves that.
+  const locked = use.spread === 'single' && use.clock <= 1 + EPS && groupClocks(use.clocks).length > 1;
+  const clock = locked ? Math.min(1, use.mod.clock) : draft && draft.id === recipe.id && draft.from === use.clock ? draft.value : use.clock;
 
   return (
     <aside className="inspector" aria-label={name(recipe)}>
@@ -131,7 +131,7 @@ export function Inspector({ result }: { result: SolveResult }) {
           />
           <span className="unit">%</span>
         </div>
-        {locked && <span className="slot-label">{t('clocksFull')}</span>}
+        {locked && <span className="slot-label">{t('clockSpreadSingle')}</span>}
         <div className="shard-slots" role="img" aria-label={`${t('shards')}: ${shards}`}>
           {[0, 1, 2].map((i) => (
             <span key={i} className={`shard-slot ${i < shards ? 'filled' : ''}`} />

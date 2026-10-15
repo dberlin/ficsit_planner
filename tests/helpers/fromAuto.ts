@@ -1,8 +1,10 @@
 import type { Edge, Node } from '@xyflow/react';
 import { data, transportFor } from '../../src/lib/data';
 import { type ExtractionSettings, extractorFor } from '../../src/lib/extraction';
-import { buildGraph, type EndpointNodeData, type FlowEdgeData, type MachineNodeData } from '../../src/lib/graph';
+import { buildGraph, type EndpointNodeData, type FlowEdgeData, type LogisticNodeData, type MachineNodeData } from '../../src/lib/graph';
 import type { SolveResult, Target } from '../../src/lib/solver';
+import { layoutGraph } from '../../src/lib/layout';
+import { layoutInBackground } from '../../src/lib/layoutClient';
 import { arrangeModel } from '../../src/lib/model/arrange';
 import type { Dir } from '../../src/lib/model/layout';
 import { extractorRate, mediumOf } from '../../src/lib/model/ports';
@@ -121,7 +123,45 @@ export async function modelFromSolve(
   /** Each building a card of its own, instead of one card saying how many. */
   eachBuilding = false,
 ): Promise<Model> {
-  const whole = buildGraph(result, tier, { dir: 'LR', splitLines: 'each' });
+  const whole = await layoutGraph(buildGraph(result, tier, { splitLines: 'each' }), { dir: 'LR' }, layoutInBackground);
+  // Auto shares endpoint cards through logistics trees. Manual extraction and outputs instead have one card
+  // per belt: a miner or pump supplying it, or an output taking it. Keep only the factory's internal logistics.
+  const graphNodes = new Map(whole.nodes.map((n) => [n.id, n]));
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, Edge[]>();
+  for (const e of whole.edges) {
+    if (e.type !== 'flow') continue;
+    for (const [by, id] of [
+      [outgoing, e.source],
+      [incoming, e.target],
+    ] as const) {
+      const list = by.get(id);
+      if (list) list.push(e);
+      else by.set(id, [e]);
+    }
+  }
+  const endpointTrees = new Set<string>();
+  const endpointBelts = new Map<string, Edge>();
+  const endpointBranches = (from: string, endpoint: string, side: 'source' | 'target') => {
+    for (const e of (side === 'source' ? outgoing : incoming).get(from) ?? []) {
+      const next = graphNodes.get(side === 'source' ? e.target : e.source)!;
+      if (next.type === 'logistic' && (next.data as LogisticNodeData)[side === 'source' ? 'ins' : 'outs'] === 1) {
+        endpointTrees.add(next.id);
+        endpointBranches(next.id, endpoint, side);
+      } else endpointBelts.set(e.id, { ...(endpointBelts.get(e.id) ?? e), [side]: endpoint });
+    }
+  };
+  for (const n of whole.nodes) {
+    if (n.type !== 'endpoint') continue;
+    const { kind } = n.data as EndpointNodeData;
+    if (kind === 'raw') endpointBranches(n.id, n.id, 'source');
+    else if (kind === 'target' || kind === 'surplus') endpointBranches(n.id, n.id, 'target');
+  }
+  whole.nodes = whole.nodes.filter((n) => !endpointTrees.has(n.id));
+  whole.edges = whole.edges.flatMap((e) => {
+    const belt = endpointBelts.get(e.id);
+    return belt ? [belt] : endpointTrees.has(e.source) || endpointTrees.has(e.target) ? [] : [e];
+  });
   const {
     graph: g,
     copies,
@@ -150,6 +190,21 @@ export async function modelFromSolve(
       ...(copies.has(n.id) ? {} : { auto: true as const }),
       ...(Math.abs(use.clock - 1) > 1e-12 ? { clock: Math.max(0.01, use.clock) } : {}),
       ...(Math.round(use.mod.sloops) > 0 ? { sloops: Math.round(use.mod.sloops) } : {}),
+    };
+    nodes.push(m);
+    byGraph.set(n.id, m);
+  }
+  // Auto always supplies its balanced logistics trees. Keep their port assignments; additional per-building
+  // branches below split or merge only the belts sharing one of those ends.
+  for (const n of g.nodes) {
+    if (n.type !== 'logistic') continue;
+    const d = n.data as LogisticNodeData;
+    const m: MNode = {
+      id: id(),
+      ...at,
+      k: 'logistic',
+      kind: d.kind,
+      ...(d.kind === 'junction' && d.ins > 1 ? { ins: d.ins } : {}),
     };
     nodes.push(m);
     byGraph.set(n.id, m);
@@ -235,27 +290,35 @@ export async function modelFromSolve(
   };
   const fan = (edges: Edge[], end: End, item: string, side: 'split' | 'merge') => tree(edges, item, side, end).ends;
 
+  const attach = (m: MNode, edges: Edge[], item: string, side: 'split' | 'merge') => {
+    const source = side === 'split';
+    const ends = source ? sourceOf : targetOf;
+    const groups = new Map<number, Edge[]>();
+    for (const e of edges) {
+      const handle = source ? e.sourceHandle : e.targetHandle;
+      const port = m.k === 'logistic' ? Number(handle!.slice(1)) : portOf(m, item, source ? 'out' : 'in');
+      const group = groups.get(port);
+      if (group) group.push(e);
+      else groups.set(port, [e]);
+    }
+    for (const [port, group] of groups) {
+      const end = { node: m.id, port };
+      if (group.length === 1) ends.set(group[0].id, end);
+      else {
+        const branches = fan(group, end, item, side);
+        for (const [i, e] of group.entries()) ends.set(e.id, branches[i]);
+      }
+    }
+  };
   for (const [key, edges] of out) {
     const [from, item] = key.split('|');
     const m = byGraph.get(from);
-    if (!m) continue;
-    const end = { node: m.id, port: portOf(m, item, 'out') };
-    if (edges.length === 1) sourceOf.set(edges[0].id, end);
-    else {
-      const ends = fan(edges, end, item, 'split');
-      for (const [i, e] of edges.entries()) sourceOf.set(e.id, ends[i]);
-    }
+    if (m) attach(m, edges, item, 'split');
   }
   for (const [key, edges] of into) {
     const [to, item] = key.split('|');
     const m = byGraph.get(to);
-    if (!m) continue;
-    const end = { node: m.id, port: portOf(m, item, 'in') };
-    if (edges.length === 1) targetOf.set(edges[0].id, end);
-    else {
-      const ends = fan(edges, end, item, 'merge');
-      for (const [i, e] of edges.entries()) targetOf.set(e.id, ends[i]);
-    }
+    if (m) attach(m, edges, item, 'merge');
   }
 
   for (const [mid, item] of buses) {

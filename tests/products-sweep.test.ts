@@ -37,7 +37,7 @@ const RATE = 12;
 /** Does the plan send something round in a circle (dark energy feeding the dark matter that makes more of it)? */
 function circles(auto: ReturnType<typeof solve>): boolean {
   const next = new Map<string, string[]>();
-  for (const e of buildGraph(auto, 9, { dir: 'LR', splitLines: 'each' }).edges) {
+  for (const e of buildGraph(auto, 9, { splitLines: 'each' }).edges) {
     if (e.type === 'flow' && e.source !== e.target) next.set(e.source, [...(next.get(e.source) ?? []), e.target]);
   }
   const state = new Map<string, 1 | 2>();

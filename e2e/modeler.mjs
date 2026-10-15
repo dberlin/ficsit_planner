@@ -1,5 +1,5 @@
 // Goes through the hand-built floor the way a player would, step by step, and checks each step both on screen and in
-// the saved model: turning a worked-out factory into a manual one, moving cards, laying and removing belts, the
+// the saved model: opening a prepared Manual factory, moving cards, laying and removing belts, the
 // panels, undo, the build menu, open ends, tidying up, and the same on a phone with taps.
 //
 //   bun run build && node e2e/modeler.mjs
@@ -18,11 +18,12 @@ fs.mkdirSync(OUT, { recursive: true });
 const still = { beltMotion: false, motion: 'reduce' };
 const saved = (state) =>
   JSON.stringify({ state: { onboarded: true, tier: 9, lang: 'en', ...state, settings: { ...still, ...state.settings } }, version: 4 });
-const factory = (targets, extra = {}) =>
+const factory = (targets, extra = {}, settings = {}) =>
   saved({
     mode: 'factory',
     plans: [{ id: 'f1', name: 'Factory 1', targets: targets.map(([item, rate]) => ({ item, rate })), ...extra }],
     active: 'f1',
+    settings,
   });
 // A Manual factory with the floor of the factory worked out for these targets on it.
 // plan and state: more to put on the tab and in the saved session.
@@ -270,9 +271,9 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   // ── A0: square belts on the Auto floor ──
   section = 'A0';
   const beltPaths = () => page.$$eval('.react-flow__edge path', (l) => l.map((p) => p.getAttribute('d') ?? ''));
-  await open(factory([['Desc_Motor_C', 10]]));
+  await open(factory([['Desc_Motor_C', 10]], {}, { autoBelts: 'curve' }));
   const curved = await beltPaths();
-  ok('curved belts by default', curved.length > 0 && curved.some((d) => /C/.test(d)));
+  ok('curved belts follow the selected shape', curved.length > 0 && curved.some((d) => /C/.test(d)));
   await open(
     saved({
       mode: 'factory',
@@ -318,7 +319,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   );
 
   // The chevrons of a curved belt lie along it: inside the box the belt's own path spans.
-  await open(factory([['Desc_Motor_C', 10]]));
+  await open(factory([['Desc_Motor_C', 10]], {}, { autoBelts: 'curve' }));
   await wait(1500);
   const strays = await page.evaluate(() => {
     const box = (d) => {
@@ -377,6 +378,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   await open(factory([['Desc_Motor_C', 10]]));
   await page.click('.deck-toggle');
   await wait(600);
+  await fit();
   // A double click on an Auto machine ticks it built (no panel opens); a single click opens its panel with the box ticked.
   await page.locator('.react-flow__node-machine .machine-node').first().dblclick();
   await wait(600);
@@ -392,9 +394,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   const locked = await slider.isDisabled();
   ok(
     'the clock slider is locked at 100 exactly when the line has more than one clock group',
-    locked === mixed &&
-      (!locked ||
-        ((await slider.inputValue()) === '100' && (await page.locator('aside.inspector').textContent()).includes('At 100%, one slower'))),
+    locked === mixed && (!locked || (await slider.inputValue()) === '100'),
     `machines "${line}", locked ${locked}`,
   );
   await shot('a1a-clock');

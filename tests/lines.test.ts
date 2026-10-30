@@ -6,7 +6,7 @@ import { buildGraph } from '../src/lib/graph';
 import { layoutGraph } from '../src/lib/layout';
 import { calcModel } from '../src/lib/model/calc';
 import { adaptModel } from '../src/lib/model/calc/adapter';
-import { modelFromSolve } from '../src/lib/model/fromAuto';
+import { modelFromSolve } from './helpers/fromAuto';
 import { cleanPlan } from '../src/lib/sanitize';
 import { factoryInput } from '../src/lib/solution';
 import { type SolveInput, solve } from '../src/lib/solver';

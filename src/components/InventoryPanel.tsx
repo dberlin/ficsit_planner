@@ -7,7 +7,7 @@ import { isDefaultGame } from '../lib/game';
 import type { SolveInput, SolveResult } from '../lib/solver';
 import { useExports, withExports } from '../lib/solution';
 import { autoAssignAsync, solveAsync } from '../lib/solverClient';
-import { aimOf, usePlan, useStore } from '../store';
+import { aimOf, usePlan, useStore, useTier } from '../store';
 import { Fold } from './Fold';
 import { Icon } from './Icon';
 import { RateInput } from './RateInput';
@@ -19,7 +19,7 @@ const SHARD_ICON = 'Desc_CrystalShard_C';
 export function InventoryPanel({ result }: { result?: SolveResult }) {
   const { t, name } = useT();
   const inventory = useStore((s) => s.inventory);
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
   const set = useStore((s) => s.set);
@@ -37,6 +37,7 @@ export function InventoryPanel({ result }: { result?: SolveResult }) {
 
   /** Best places first; with `all`, every free slot too, and the shards left over into the extractors. */
   const place = async (all: boolean) => {
+    const forPlan = plan.id;
     setBusy(all ? 'all' : 'place');
     try {
       const input: SolveInput = {
@@ -56,7 +57,10 @@ export function InventoryPanel({ result }: { result?: SolveResult }) {
         const r = await solveAsync({ ...input, mods });
         overclock = overclockExtractors(r.raw, { ...ex, overclock: undefined }, inventory.shards - r.shards);
       }
-      updatePlan({ mods, extraction: overclock && Object.keys(overclock).length ? { ...plainExtraction, overclock } : plainExtraction });
+      const patch = { mods, extraction: overclock && Object.keys(overclock).length ? { ...plainExtraction, overclock } : plainExtraction };
+      // The answer is for the tab it was asked in, even when another one is on screen by now.
+      if (useStore.getState().active === forPlan) updatePlan(patch);
+      else useStore.setState((s) => ({ plans: s.plans.map((p) => (p.id === forPlan ? { ...p, ...patch } : p)) }));
     } catch {
       // The plan itself failed to solve; the error already shows on the factory floor.
     } finally {

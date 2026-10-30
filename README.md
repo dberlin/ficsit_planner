@@ -65,6 +65,7 @@ Coded with AI. What changed lately is under **Settings › Updates** in the app,
 - <img src="public/icons/Build_GeneratorNuclear_C.webp" width="28" height="28" align="top" alt="Nuclear Power Plant"> **Power planner.** Power plants are tabs too and can mix generators. Size one by the fuel you have, the MW you want or the factories it runs. The fuel chain, water, nuclear waste, augmenters and Power Storage are counted.
 - <img src="public/icons/Desc_HardDrive_C.webp" width="28" height="28" align="top" alt="Hard Drive"> **Codex.** Parts, resources, buildings, vehicles, equipment, milestones, MAM research, alternate recipes and the AWESOME Shop, with the game's descriptions, plus creatures, world finds and crash sites. Every part shows its whole production line and how each of its recipes compares; every alternate is ranked against the standard recipe. Guides cover getting started, the Space Elevator, power, oil and nuclear. **Build this factory** opens a factory for any part.
 - <img src="public/icons/Build_MinerMk3_C.webp" width="28" height="28" align="top" alt="Miner Mk.3"> **World map.** All 459 resource nodes, 118 well nodes and 31 geysers on the game's map, filtered by resource and purity. Pressing a node shows what each miner or extractor gets from it. Somersloops, Mercer Spheres, power slugs, crash sites, plants and creature spawns can be turned on too.
+- <img src="public/icons/Desc_HardDrive_C.webp" width="28" height="28" align="top" alt="Hard Drive"> **Game save.** Import your save to take its tier, milestones, alternates, Somersloops and power shards; see what you picked up and where you mine on the map; open each factory in it read only, copy it, or link a factory tab to it so what you built gets ticked; and make a power plant tab of each power circuit. See [Game save](#game-save).
 - <img src="public/icons/Desc_FreightWagon_C.webp" width="28" height="28" align="top" alt="Freight Wagon"> **Linked factories.** A factory can take an item from another factory tab, which then makes it on top of its own products.
 - <img src="public/icons/Desc_ModularFrameLightweight_C.webp" width="28" height="28" align="top" alt="Radio Control Unit"> **Share links.** The **Share** button copies a link that contains the factory (and the power plants that run it). Opening it adds a copy as a new tab. Nothing is uploaded.
 - <img src="public/icons/Desc_CircuitBoard_C.webp" width="28" height="28" align="top" alt="Circuit Board"> **Settings.** Panel position, card and text size, spacing, belt labels, colours, interface size, decimals and animations. **Game settings** take your save's part cost, power use and Space Elevator multipliers. Save all factories and settings to a file and load them back. **Help** explains the terms on screen, **Updates** lists what changed.
@@ -79,12 +80,39 @@ Coded with AI. What changed lately is under **Settings › Updates** in the app,
 - **Firefox (desktop):** has no install option. Use it as a normal website.
 
 After the first visit everything is cached, including the solver and all icons. The planner then works without a
-network. Updates install on their own the next time you open it, and your factories stay saved in the browser.
+network. When an update has downloaded, the app asks you to reload, and your factories stay saved in the browser.
 
 To make the cards or the interface bigger or smaller, open **Settings** (top right). The browser's zoom (Ctrl + /
 Ctrl −, or pinch on a touch screen) works too. On a desktop, drag the panel's edge to resize it (double-click the
 edge to reset it), or click **Hide panel** to give the factory the whole screen. Amounts have up and down buttons
 (and the arrow keys) that move them one whole number at a time.
+
+## Game save
+
+**Import save** in the top bar reads a Satisfactory save (1.0 to 1.2) in the browser. Nothing is uploaded: the save
+holds your player name and account, so it never leaves your computer, and it is not in backups or share links.
+
+1. Click **Import save**. The save folder's path is copied for you:
+   `%LOCALAPPDATA%\FactoryGame\Saved\SaveGames` on Windows.
+2. Click **Choose folder**, paste the path into the window's address bar, pick the SaveGames folder and confirm.
+   You can also choose a single `.sav` file or drop one on the window. On a phone, choose the file.
+3. Pick the game. Its newest save is chosen for you, or pick another.
+4. The first time, say what the save may set: tier and alternates, Somersloops and shards, factories, power circuits.
+   Change it later in **Settings › Game save**.
+
+What comes in:
+
+- **Progress.** The tier, the milestones you skipped, your alternate recipes (turned on in every factory), and your
+  Somersloops and power shards (free and in machines).
+- **Map.** What you picked up is greyed out (or hidden), mined nodes get a ring as far round as the miner's clock,
+  and the HUB, Space Elevator, MAM, AWESOME Shop, radar towers and your factories are marked.
+- **Factories.** The factories found in the save are boxed and named on the map. They are a guess from how far buildings
+  stand apart and how long the belts between them run, so check them against your own idea of the factory.
+- **Power circuits.** Each circuit with generators shows what it makes and draws, and becomes a power plant tab with
+  one click.
+
+**Refresh** reads the newest save of the same game again. If you changed the tier, alternates or inventory since the
+last import, you choose which to keep. **Forget** in Settings › Game save removes it from the browser.
 
 ## Development
 
@@ -94,14 +122,16 @@ Needs [Bun](https://bun.sh).
 bun install
 bun run dev        # http://localhost:1420
 bun test           # solver, hand-checked numbers, random plans, graph, saved state and strings
+bun run test:dom   # components in a fake browser (happy-dom): the colour wheel, the card menu, Settings › Game save
 bun run check      # Biome lint + format check (bun run format to fix)
 bun run build      # type check + production bundle in dist/
 bun run preview    # serve dist/ with the service worker, as it will be deployed
 bun run sweep      # every screen at five window sizes, checked for layout problems (see CONTRIBUTING)
 bun run visual     # screenshots of 28 screens compared with e2e/baseline
+bun run a11y       # axe on the main screens at two sizes; what it finds and we left is in e2e/known-a11y.json
 ```
 
-CI (GitHub Actions) runs check, test and build on every push, then a sample of every screen in Chromium, WebKit
+CI (GitHub Actions) runs check, test, test:dom and build on every push, then a sample of every screen in Chromium, WebKit
 and Firefox.
 
 The build is a static site. To serve it from a sub-folder, for example GitHub Pages at `/<repo>/`, set
@@ -184,7 +214,8 @@ bottom on phones.
 | --- | --- |
 | `src/lib/solver.ts` | LP model, solve, somersloop/shard auto placement |
 | `src/lib/solver.worker.ts`, `solverClient.ts` | the solver in a Web Worker, and its promise API |
-| `src/lib/graph.ts` | solution → nodes and belts; layout tries both directions and three rankings, keeps the one that fits the screen with the fewest crossings, and routes belts through space kept for their labels |
+| `src/lib/graph.ts` | solution → machine cards, item ends, balanced logistics trees and belts |
+| `src/lib/layout.ts`, `src/lib/layoutClient.ts` | shared ELK worker layout, product-chain clusters, routed belts, layout scoring and placement caching |
 | `src/lib/extraction.ts` | miner and pump counts per node purity (or on the player's own nodes), and their MW per unit for the power planner |
 | `src/lib/groups.ts` | how to split a line into groups whose belts and pipes each fit |
 | `src/lib/split.ts` | who sends what to whom (the graph's belts), and a line split into one group per destination |
@@ -211,6 +242,7 @@ bottom on phones.
 | `tools/icon-extractor/` | .NET icon extractor |
 | `tools/map-extractor/`, `scripts/extract-map.mjs` | .NET world reader (resource nodes, the map picture) and the script that tiles the map |
 | `src/lib/world.ts`, `src/components/WorldMap.tsx`, `src/components/MapNav.tsx` | the world map: node data, the map (Leaflet), its filter |
+| `src/lib/save/` | the game save reader (header, zlib chunks, objects) in a Web Worker, and what the planner takes from it: progress, map factory bounds and power circuits |
 | `tests/` | solver, hand-checked production lines (`golden`), random plans (`fuzz`), extraction and your own nodes, build groups, split by destination, game multipliers, auto placement, graph layout, unlock tiers, Codex insights, saved state (with a 0.12 save that every later version must still load, `fixtures/`), feedback bans and string tests |
 | `e2e/` | the screen sweep (`sweep.mjs`, `checks.js`) and the screenshot comparison (`visual.mjs`, `baseline/`) |
 | `docs/manual-test.md` | a click-through checklist for testing the app by hand before a release |
@@ -233,6 +265,7 @@ saved factories when they load.
 | `src/data/meta.json` | which game build the data came from | `bun run extract` |
 | `src/data/icon-manifest.json` | icon texture path per item/building | `bun run extract` |
 | `src/data/codex.json` | descriptions, stack sizes, every building, vehicles, equipment, milestones, MAM research, the AWESOME Shop (loaded when the Codex opens) | `bun run extract:codex` |
+| `src/data/milestones.json` | the milestones that unlock something the planner uses, for the tier window | `bun run extract:milestones` |
 | `src/data/codex-icons.json` | icon texture paths the Codex needs on top of the planner's | `bun run extract:codex` |
 | `src/data/elevator.json` | the Space Elevator's phases: what each asks for and the tiers it opens | `bun run extract:elevator` |
 | `src/data/insights.json` | each part's production line, its recipes compared, and every fuel's cost, worked out with the solver | `bun run insights` |
@@ -251,10 +284,11 @@ Last extract: **Satisfactory 1.2.4.0**, build 502094, Unreal Engine 5.6.1, on 20
 bun run extract                                            # Epic install on C: by default
 bun run extract "D:/SteamLibrary/steamapps/common/Satisfactory"
 bun run extract:codex                                      # after extract: it reads gamedata.json
+bun run extract:milestones                                 # after extract:codex: the milestones the tier window lists
 bun run icons                                              # needs the .NET 10 SDK
 bun run icons:codex
-bun run extract:map                                        # the world map: nodes and tiles, needs .NET too
-bun run extract:world                                      # after extract:map: finds, creatures and their icons
+bun run extract:map                                        # the world map: nodes, tiles and node names, needs .NET too
+bun run extract:world                                      # after extract:map: finds, creatures, their icons and pickup names
 bun run extract:elevator                                   # the Space Elevator's phases, needs .NET too
 bun run insights                                           # last: the Codex's worked-out lines (a test fails until it's run)
 dotnet run --project tools/icon-extractor -- "D:/SteamLibrary/steamapps/common/Satisfactory"
@@ -273,6 +307,9 @@ Commit the changed files under `src/data` and `public/icons` afterwards.
   so `UsmapPatch.cs` inserts a placeholder before loading it. The engine version is set in `Program.cs`
   (`EGame.GAME_UE5_6`). Bump it if a game update moves to a newer Unreal version. Pass `--find <text>` in place
   of the manifest to list archive paths containing that text, to look up an icon by hand.
+- `src/data/world-names.json` holds the game's own names of the map's pickups and nodes, in the order of
+  `finds.json` and `world.json`. A save names what was picked up but no longer says where it was, so a save import
+  finds it by name. Both extract scripts write their part of the file; run both.
 
 ## Notes
 
@@ -283,6 +320,10 @@ Commit the changed files under `src/data` and `public/icons` afterwards.
 ## Thanks
 
 - [@dberlin](https://github.com/dberlin): the fix that keeps changes made while the Manual floor is being laid out.
+- [GreyHak](https://github.com/GreyHak/sat_sav_parse) (`sat_sav_parse`) and
+  [etothepii](https://github.com/etothepii4/satisfactory-file-parser) (`satisfactory-file-parser`): their save readers
+  explained the save format. The planner's reader is its own code; etothepii's parser checks it in the tests.
+- Hot-Category2986 and BouBouRziPorC on Reddit, who asked to bring a save in.
 - Everyone who reported bugs and asked for features on Reddit; they're named in Settings › Updates.
 
 ## License

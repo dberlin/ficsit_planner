@@ -1,5 +1,6 @@
+import { skipKey } from './unlocks';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { aimOf, type PowerPlan, useStore } from '../store';
+import { aimOf, type PowerPlan, useStore, useTier } from '../store';
 import { sinkPerMin } from './data';
 import { type PoolLine, type PoolParty, plantTakesFromPool, poolLines, poolParties, poolSources, takesFromPool } from './pool';
 import { effectiveExtraction, type ExtractionUse, planExtraction } from './extraction';
@@ -157,18 +158,19 @@ function plantEntry(
   clocks: ClockSpread,
   land: () => void,
 ) {
-  const key = JSON.stringify([pp, demand, tier, aim, game, clocks]);
+  const key = JSON.stringify([pp, demand, tier, skipKey(), aim, game, clocks]);
   const hit = plantCache.get(key);
   if (hit) return hit;
   const input = pp.sizeBy === 'have' && pp.have.length === 0 ? undefined : powerInput(pp, demand, tier, aim, game, clocks);
   const entry: PlantEntry = { pending: !!input };
   plantCache.set(key, entry);
   if (plantCache.size > 60) plantCache.delete(plantCache.keys().next().value as string);
-  if (input)
+  if (input) {
+    const extraction = effectiveExtraction(pp.chain.extraction, tier);
     solveAsync(input).then(
       (r) => {
         entry.result = r;
-        entry.extraction = planExtraction(r.raw, effectiveExtraction(pp.chain.extraction, tier));
+        entry.extraction = planExtraction(r.raw, extraction);
         entry.pending = false;
         land();
       },
@@ -178,13 +180,14 @@ function plantEntry(
         land();
       },
     );
+  }
   return entry;
 }
 
 /** Every power plant worked out in the background, each with the load the factories put on it. */
 function usePlantRows(draws: FactoryDraw[], enabled = true): PlantRow[] {
   const plants = useStore((s) => s.power);
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
   const clocks = useStore((s) => s.settings.clockSpread);
@@ -218,7 +221,7 @@ function usePlantRows(draws: FactoryDraw[], enabled = true): PlantRow[] {
           leaves: r ? madeBeyond(r.surplus, r.supplies) : [],
         };
       }),
-    [enabled, plants, draws, tier, aim, game, clocks, landed],
+    [enabled, plants, draws, tier, aim, game, clocks, landed, skipKey()],
   );
 }
 

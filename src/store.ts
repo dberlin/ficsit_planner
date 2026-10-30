@@ -8,14 +8,17 @@ import type { Aim } from './lib/solution';
 import { generatorById, recipeById } from './lib/data';
 import { PLANT_NAMES, type Plant, type SizeBy, sizable } from './lib/power';
 import { POOL, suppliesOf } from './lib/pool';
-import { cleanChoice, cleanNumber, cleanPlan, cleanPowerPlan, cleanSettings, gridToPower } from './lib/sanitize';
+import { cleanChoice, cleanNumber, cleanPlan, cleanPowerPlan, cleanSettings, gridToPower, splitFloors } from './lib/sanitize';
 import { DEFAULT_SETTINGS, type Settings } from './lib/settings';
 import type { RecipeMod, Target } from './lib/solver';
 import { cleanMapFilter, DEFAULT_MAP_FILTER, type MapFilter } from './lib/world';
-import { autoScope, forget, powerScope, record, redo, undo } from './lib/model/history';
-import { floorTargets, sameTargets, withTargets } from './lib/model/targets';
+import { autoScope, powerScope, record, redo, undo } from './lib/model/history';
+import { floorTargets, sameTargets } from './lib/model/targets';
+import { cleanSkipped, setSkipped } from './lib/unlocks';
 import { emptyModel, type Model } from './lib/model/types';
 import type { Carrier } from './lib/transport';
+import type { SaveInfo } from './lib/save/apply';
+import { cleanGrids, cleanSaveMap, type SaveGrid } from './lib/save/map';
 
 export const MAX_TIER = Math.max(...data.recipes.map((r) => r.tier ?? 0));
 
@@ -44,10 +47,12 @@ export interface Plan {
   extraction: ExtractionSettings;
   /** How each input arrives and each output leaves ("in:<item>", "out:<item>"); belts or pipes when not set. */
   transport?: Record<string, Route>;
-  /** Built by hand on the floor instead of worked out from the targets. */
+  /** What kind of factory this is, for good: built by hand on a floor of its own, or (unset) worked out from the targets. */
   floor?: 'manual';
-  /** The hand-built factory; kept when switching back to Auto, so Manual comes back as it was. */
+  /** The hand-built floor of a Manual factory. */
   model?: Model;
+  /** The coloured areas drawn on the Auto floor, kept as a model with nothing but areas in it. */
+  areas?: Model;
   /** Recipes whose machines are built in the game, ticked from the Auto floor; Manual cards start from them. */
   built?: string[];
   /** Targets (by item) made on a line of their own, apart from the others; unset: everything is one line. */
@@ -189,13 +194,13 @@ export const makeFromLeftover =
     };
   };
 
-/** A blank factory tab: the standard recipes, plus the ones the player marked as unlocked on the All page. */
-export const newPlan = (name: string, unlocked: string[] = []): Plan => ({
+/** A blank factory tab: the standard recipes (less the ones switched off on the All page), plus the ones marked as unlocked there. */
+export const newPlan = (name: string, unlocked: string[] = [], off: string[] = []): Plan => ({
   id: uid(),
   name,
   targets: [],
   supplies: [],
-  enabled: [...defaultEnabled(), ...unlocked],
+  enabled: [...defaultEnabled().filter((id) => !off.includes(id)), ...unlocked],
   caps: {},
   fixed: {},
   mods: {},
@@ -217,11 +222,19 @@ interface State {
   activePower: string;
   settings: Settings;
   /** Open modal. Not persisted. */
-  dialog?: 'settings' | 'report';
+  dialog?: 'settings' | 'report' | 'save';
+  /** The Settings section to open on, when something else than the usual is asked for. Not persisted. */
+  settingsAt?: 'save';
+  /** The game save last imported and what it said; unset until the first import. Never in a backup or a shared link. */
+  save?: SaveInfo;
   /** Highest milestone tier the player has unlocked in their save. Recipes and buildings above it sit out. */
   tier: number;
   /** Alternate and converter recipes the player has unlocked in the game: every new factory starts with them on. */
   unlocked: string[];
+  /** Standard recipes switched off on the All page: every new factory starts without them. */
+  standardOff: string[];
+  /** Milestones of the tiers above the player has not bought: what they open stays locked. Ids in lib/unlocks. */
+  skipped: string[];
   /** Which page of "All" is on screen. Not persisted. */
   overviewTab?: 'factories' | 'recipes';
   /** Every raw resource costs the plan the same, for mods that let you build nodes anywhere. */
@@ -273,6 +286,7 @@ interface State {
         | 'mapFilter'
         | 'mapFocus'
         | 'dialog'
+        | 'settingsAt'
         | 'tier'
         | 'equalWeights'
         | 'customWeights'
@@ -313,7 +327,10 @@ interface State {
   removePlant: (id: string) => void;
   setFixed: (item: string, rate: number | undefined) => void;
   updatePlan: (patch: Partial<Plan> | ((p: Plan) => Partial<Plan>)) => void;
-  addPlan: (name: string) => void;
+  /** A new tab: worked out from its targets, or (manual) an empty floor to build on by hand. */
+  addPlan: (name: string, manual?: boolean) => void;
+  /** A new factory tab built by hand from a game save factory's floor, linked to that factory. */
+  /** Links a factory tab to a factory in the game save, or unlinks it; a save factory is linked to one tab at most. */
   /**
    * Opens a factory making one item (the Codex's build buttons): in the tab on screen when it's still blank,
    * otherwise in a new tab named after the item. With a recipe, that recipe is the only one making the item.
@@ -321,6 +338,8 @@ interface State {
   buildFactory: (item: string, name: string, recipe?: string) => void;
   /** Opens a power plant burning one fuel: in the plant on screen when it has no generators yet, otherwise in a new one. */
   buildPlant: (generator: string, fuel: string) => void;
+  /** Opens a power plant with a game save circuit's generators, each row a set count: in the plant on screen when it is untouched, otherwise in a new one. */
+  plantFromSave: (name: string, rows: SaveGrid['plants']) => void;
   duplicatePlan: (id: string) => void;
   removePlan: (id: string) => void;
   renamePlan: (id: string, name: string) => void;
@@ -341,11 +360,13 @@ interface State {
   setUnlocked: (ids: string[], on: boolean) => void;
   /** Turns the unlocked recipes on in every factory already open; nothing is turned off. */
   applyUnlocked: () => void;
+  /** Marks milestones as not bought (or bought again). */
+  markSkipped: (ids: string[], skipped: boolean) => void;
   setCap: (item: string, cap: number | undefined) => void;
   setWeight: (item: string, weight: number | undefined) => void;
   setMod: (recipe: string, mod: RecipeMod | undefined) => void;
-  /** Auto or Manual for a factory tab; a model to start Manual with, when there isn't one yet or it's rebuilt. */
-  setFloor: (plan: string, floor: 'auto' | 'manual', model?: Model) => void;
+  /** Turns a factory nothing has been put in yet into a Manual one; a factory with something in it stays as it is. */
+  makeManual: (plan: string) => void;
   /**
    * Changes a factory's hand-built model. The model before goes on the tab's undo list; edits sharing a merge key a
    * moment apart (typing, a slider) undo as one.
@@ -417,11 +438,16 @@ export const aimOf = (s: Pick<State, 'equalWeights' | 'fewestBuildings' | 'custo
   s.fewestBuildings ? 'buildings' : s.customWeights ? 'custom' : s.equalWeights ? 'equal' : 'rarity';
 
 /* Read while the store is created, so it has to be defined above it. */
+const standard = new Set(data.recipes.filter((r) => r.kind === 'standard').map((r) => r.id));
 const optional = new Set(data.recipes.filter((r) => r.kind === 'alternate' || r.kind === 'converter').map((r) => r.id));
 
 /** The unlocked list as saved: only alternate and converter recipes this build knows, each once. */
 export const cleanUnlocked = (v: unknown): string[] =>
   Array.isArray(v) ? [...new Set(v.filter((id): id is string => typeof id === 'string' && optional.has(id)))] : [];
+
+/** The standard recipes switched off for new factories, as saved: only standard recipes this build knows, each once. */
+export const cleanStandardOff = (v: unknown): string[] =>
+  Array.isArray(v) ? [...new Set(v.filter((id): id is string => typeof id === 'string' && standard.has(id)))] : [];
 
 /** What a reload keeps: the part of the state written to the browser's storage. */
 export const persisted = (s: State): Persisted => ({
@@ -435,12 +461,15 @@ export const persisted = (s: State): Persisted => ({
   sideWidth: s.sideWidth,
   tier: s.tier,
   unlocked: s.unlocked,
+  standardOff: s.standardOff,
+  skipped: s.skipped,
   equalWeights: s.equalWeights,
   customWeights: s.customWeights,
   fewestBuildings: s.fewestBuildings,
   seenUpdates: s.seenUpdates,
   onboarded: s.onboarded,
   inventory: s.inventory,
+  save: s.save,
   view: s.view,
   tab: s.tab,
   plans: s.plans,
@@ -466,7 +495,7 @@ export const useStore = create<State>()(
           }),
         });
       };
-      // Plan edits go to whatever is on screen: the active factory, or the power plant's fuel plan. On the Auto floor
+      // Plan edits go to whatever is on screen: the active factory, or the power plant's fuel plan. On an Auto factory
       // the plan as it was goes on the tab's undo list; edits sharing a merge key a moment apart undo as one.
       const update = (fn: (p: Plan) => Partial<Plan>, merge?: string) => {
         if (get().mode === 'power') return power((pp) => ({ chain: { ...pp.chain, ...fn(pp.chain) } }), merge);
@@ -475,31 +504,27 @@ export const useStore = create<State>()(
             if (p.id !== get().active) return p;
             const patch = fn(p);
             if (p.floor !== 'manual' && changes(p, patch)) record(autoScope(p.id), p, merge);
-            // Targets and a hand-built floor's products are one list: new targets reach its output cards, one step to undo.
-            if (patch.targets && p.model && !patch.model) {
-              const model = withTargets(p.model, patch.targets);
-              if (model !== p.model) {
-                record(p.id, p.model, 'targets');
-                return { ...p, ...patch, model };
-              }
-            }
             return { ...p, ...patch };
           }),
         });
       };
-      /** A hand-built floor changed: its output cards are the factory's targets from here on. */
+      /** A Manual factory's floor changed: its output cards are the factory's targets from here on. */
       const withFloor = (p: Plan, model: Model): Plan => {
         const targets = floorTargets(model, p.targets);
         return sameTargets(targets, p.targets) ? { ...p, model } : { ...p, model, targets };
       };
-      /** Steps the Auto floor's plan, or the power plant, on screen back or forward one edit. */
+      /** Steps the Auto factory's plan, or the power plant, on screen back or forward one edit. */
       const stepPlan = (step: typeof undo) => {
         if (get().mode === 'power') {
           const id = activePowerPlan(get()).id;
           const cur = get().power.find((p) => p.id === id);
           const snap = step(powerScope(id), cur);
-          // Which factories a plant feeds is set from the factory tabs too, so it stays as it is.
-          if (snap) set({ power: get().power.map((p) => (p.id === id ? { ...snap, factories: p.factories } : p)), inspect: undefined });
+          // Which factories a plant feeds is set from the factory tabs too, so it stays as it is, and the tab keeps its name.
+          if (snap)
+            set({
+              power: get().power.map((p) => (p.id === id ? { ...snap, factories: p.factories, name: p.name, autoName: p.autoName } : p)),
+              inspect: undefined,
+            });
           return;
         }
         const id = get().active;
@@ -507,14 +532,9 @@ export const useStore = create<State>()(
         if (!cur || cur.floor === 'manual') return;
         const snap = step(autoScope(id), cur);
         if (!snap) return;
-        // The tab keeps its name, and its hand-built floor as it is except for the targets it shares with the plan.
-        const { floor: _f, model: _m, name: _n, ...rest } = snap;
-        const model = cur.model && withTargets(cur.model, rest.targets);
-        if (model && model !== cur.model) record(id, cur.model, 'targets');
-        set({
-          plans: get().plans.map((p) => (p.id === id ? { ...rest, name: p.name, ...(model ? { model } : {}) } : p)),
-          inspect: undefined,
-        });
+        // The tab keeps its name.
+        const { name: _n, ...rest } = snap;
+        set({ plans: get().plans.map((p) => (p.id === id ? { ...rest, name: p.name } : p)), inspect: undefined });
       };
       const plants = (fn: (list: Plant[]) => Plant[], merge?: string) => power((pp) => ({ plants: fn(pp.plants) }), merge);
 
@@ -528,6 +548,8 @@ export const useStore = create<State>()(
         settings: DEFAULT_SETTINGS,
         tier: MAX_TIER,
         unlocked: [],
+        standardOff: [],
+        skipped: [],
         equalWeights: false,
         customWeights: false,
         fewestBuildings: false,
@@ -628,15 +650,18 @@ export const useStore = create<State>()(
             typeof patch === 'function' ? patch : () => patch,
             typeof patch === 'function' ? undefined : `plan:${Object.keys(patch).join()}`,
           ),
-        addPlan: (name) => {
-          const p = newPlan(name, get().unlocked);
+        addPlan: (name, manual) => {
+          const p: Plan = {
+            ...newPlan(name, get().unlocked, get().standardOff),
+            ...(manual ? { floor: 'manual', model: emptyModel() } : {}),
+          };
           set({ plans: [...get().plans, p], active: p.id, inspect: undefined });
         },
         buildFactory: (item, name, recipe) => {
           const { plans, active } = get();
           const cur = plans.find((p) => p.id === active);
-          const blank = cur && cur.targets.length === 0 && cur.supplies.length === 0 ? cur : undefined;
-          let enabled = [...defaultEnabled(), ...get().unlocked];
+          const blank = cur && !cur.floor && cur.targets.length === 0 && cur.supplies.length === 0 ? cur : undefined;
+          let enabled = [...defaultEnabled().filter((id) => !get().standardOff.includes(id)), ...get().unlocked];
           if (recipe) {
             const rivals = new Set(data.recipes.filter((r) => r.id !== recipe && r.outputs[0]?.item === item).map((r) => r.id));
             enabled = [...enabled.filter((id) => !rivals.has(id)), recipe];
@@ -666,6 +691,27 @@ export const useStore = create<State>()(
           get().addPlant(generator, fuel);
           set({ mode: 'power', tab: 'targets', pane: 'floor', inspect: undefined });
         },
+        plantFromSave: (name, rows) => {
+          const blank = activePowerPlan(get());
+          if (!blank.autoName || blank.plants.length > 0) get().addPowerPlan(name);
+          const id = activePowerPlan(get()).id;
+          const plants = rows.map(({ n, ...r }): Plant => ({ ...r, id: uid(), by: 'count', amount: n }));
+          set({
+            power: get().power.map((pp) => {
+              if (pp.id !== id) return pp;
+              const { autoName: _, ...rest } = pp;
+              const others = get()
+                .power.filter((p) => p.id !== id)
+                .map((p) => p.name);
+              return { ...rest, name: freeName(name, others), plants };
+            }),
+            mode: 'power',
+            tab: 'targets',
+            pane: 'floor',
+            overview: undefined,
+            inspect: undefined,
+          });
+        },
         duplicatePlan: (id) => {
           const src = get().plans.find((p) => p.id === id);
           if (!src) return;
@@ -684,7 +730,7 @@ export const useStore = create<State>()(
         },
         removePlan: (id) => {
           const plans = get().plans.filter((p) => p.id !== id);
-          if (plans.length === 0) plans.push(newPlan('Factory 1', get().unlocked));
+          if (plans.length === 0) plans.push(newPlan('Factory 1', get().unlocked, get().standardOff));
           const active = get().active === id ? plans[Math.max(0, get().plans.findIndex((p) => p.id === id) - 1)].id : get().active;
           // Power plants stop counting a factory that's gone, and what came from it is simply on hand now.
           const power = get().power.map((pp) => (pp.factories === 'all' ? pp : { ...pp, factories: pp.factories.filter((f) => f !== id) }));
@@ -739,11 +785,22 @@ export const useStore = create<State>()(
           }),
         setUnlocked: (ids, on) => {
           const cur = new Set(get().unlocked);
+          const off = new Set(get().standardOff);
           for (const id of ids) {
-            if (on) cur.add(id);
+            // A standard recipe is on for new factories unless it is in the off list.
+            const list = standard.has(id) ? off : cur;
+            if (on === !standard.has(id)) list.add(id);
+            else list.delete(id);
+          }
+          set({ unlocked: [...cur], standardOff: [...off] });
+        },
+        markSkipped: (ids, skipped) => {
+          const cur = new Set(get().skipped);
+          for (const id of ids) {
+            if (skipped) cur.add(id);
             else cur.delete(id);
           }
-          set({ unlocked: [...cur] });
+          set({ skipped: cleanSkipped([...cur]) });
         },
         applyUnlocked: () => {
           const { unlocked, plans } = get();
@@ -782,17 +839,15 @@ export const useStore = create<State>()(
             else mods[recipe] = mod;
             return { mods };
           }, `mod:${recipe}`),
-        setFloor: (id, floor, model) => {
-          if (model) forget(id);
+        makeManual: (id) =>
           set({
-            plans: get().plans.map((p) => {
-              if (p.id !== id) return p;
-              const { floor: _, ...rest } = p;
-              return { ...rest, ...(floor === 'manual' ? { floor } : {}), ...(model ? { model } : {}) };
-            }),
+            plans: get().plans.map((p) =>
+              p.id === id && !p.floor && p.targets.length === 0 && p.supplies.length === 0
+                ? { ...p, floor: 'manual', model: emptyModel() }
+                : p,
+            ),
             inspect: undefined,
-          });
-        },
+          }),
         editModel: (id, fn, merge) => {
           const plan = get().plans.find((p) => p.id === id);
           // A manual floor saved without its model starts from an empty one.
@@ -820,13 +875,19 @@ export const useStore = create<State>()(
     {
       name: 'ficsit-planner',
       storage: jsonPlanStorage,
-      version: 3,
+      version: 4,
       partialize: persisted,
       migrate: migrateState,
       merge: mergeState,
     },
   ),
 );
+
+// The tier checks all over the app read the skipped list from the unlocks module, so it follows the store.
+setSkipped(useStore.getState().skipped);
+useStore.subscribe((s, prev) => {
+  if (s.skipped !== prev.skipped) setSkipped(s.skipped);
+});
 
 type Persisted = Partial<
   Pick<
@@ -840,12 +901,15 @@ type Persisted = Partial<
     | 'settings'
     | 'tier'
     | 'unlocked'
+    | 'standardOff'
+    | 'skipped'
     | 'equalWeights'
     | 'customWeights'
     | 'fewestBuildings'
     | 'seenUpdates'
     | 'onboarded'
     | 'inventory'
+    | 'save'
     | 'view'
     | 'tab'
     | 'plans'
@@ -874,6 +938,8 @@ export function migrateState(persisted: unknown, version: number): Persisted {
       active: plan.id,
     };
   }
+  // Before version 4 a tab could hold an Auto factory and a Manual floor at once; now each is a tab of its own.
+  if (version < 4 && Array.isArray(old.plans)) return { ...old, plans: splitFloors(old.plans) } as Persisted;
   return old as Persisted;
 }
 
@@ -920,6 +986,8 @@ export function mergeState<S extends State>(persisted: unknown, current: S): S {
     settings: cleanSettings(p.settings),
     tier: Math.round(cleanNumber(p.tier, 0, MAX_TIER, current.tier)),
     unlocked: cleanUnlocked(p.unlocked),
+    standardOff: cleanStandardOff(p.standardOff),
+    skipped: cleanSkipped(p.skipped),
     equalWeights: p.equalWeights === true,
     customWeights: p.customWeights === true,
     fewestBuildings: p.fewestBuildings === true,
@@ -929,6 +997,7 @@ export function mergeState<S extends State>(persisted: unknown, current: S): S {
       sloops: Math.round(cleanNumber(p.inventory?.sloops, 0, 1e4, 0)),
       shards: Math.round(cleanNumber(p.inventory?.shards, 0, 1e4, 0)),
     },
+    save: cleanSave(p.save),
     view: cleanChoice(p.view, ['graph', 'table', 'transport'] as const, current.view),
     tab: cleanChoice(p.tab, ['targets', 'recipes', 'resources'] as const, current.tab),
     deckHeight: typeof p.deckHeight === 'number' ? cleanNumber(p.deckHeight, 100, 4000, 320) : undefined,
@@ -941,8 +1010,50 @@ export function mergeState<S extends State>(persisted: unknown, current: S): S {
   };
 }
 
+/** The followed game save as kept, checked like the rest; anything malformed drops it, as if never imported. */
+export function cleanSave(v: unknown): SaveInfo | undefined {
+  const s = v as Partial<SaveInfo> | undefined;
+  if (!s || typeof s !== 'object' || typeof s.session !== 'string' || !s.seen || !s.answers) return undefined;
+  const text = (x: unknown) => (typeof x === 'string' ? x.slice(0, 200) : '');
+  const count = (x: unknown) => Math.round(cleanNumber(x, 0, 1e5, 0));
+  const a = s.answers;
+  return {
+    session: s.session.slice(0, 200),
+    game: text(s.game),
+    file: text(s.file),
+    savedAt: cleanNumber(s.savedAt, 0, 1e14, 0),
+    playSeconds: Math.round(cleanNumber(s.playSeconds, 0, 1e9, 0)),
+    saveVersion: count(s.saveVersion),
+    build: cleanNumber(s.build, 0, 1e9, 0),
+    ...(typeof s.phase === 'string' ? { phase: s.phase.slice(0, 100) } : {}),
+    importedAt: cleanNumber(s.importedAt, 0, 1e14, 0),
+    ...(s.from === 'manual' || s.from === 'auto' ? { from: s.from } : {}),
+    answers: {
+      progress: a.progress !== false,
+      inventory: a.inventory !== false,
+      factories: a.factories !== false,
+      power: a.power !== false,
+    },
+    ...(s.map ? { map: cleanSaveMap(s.map) } : {}),
+    ...(s.grids ? { grids: cleanGrids(s.grids) } : {}),
+    seen: {
+      tier: Math.round(cleanNumber(s.seen.tier, 0, MAX_TIER, 0)),
+      skipped: cleanSkipped(s.seen.skipped),
+      unlocked: cleanUnlocked(s.seen.unlocked),
+      sloops: count(s.seen.sloops),
+      shards: count(s.seen.shards),
+    },
+  };
+}
+
 /** The plan on screen: the active factory, or in the power planner the plant's fuel plan. */
 export const currentPlan = (s: Pick<State, 'mode' | 'power' | 'activePower' | 'plans' | 'active'>) =>
   s.mode === 'power' ? activePowerPlan(s).chain : (s.plans.find((p) => p.id === s.active) ?? s.plans[0]);
 
 export const usePlan = () => useStore(currentPlan);
+
+/** The tier, read again when a milestone is skipped or bought: components that check what the tier opens use this. */
+export const useTier = () => {
+  useStore((s) => s.skipped);
+  return useStore((s) => s.tier);
+};

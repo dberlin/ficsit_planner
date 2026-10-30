@@ -1,0 +1,777 @@
+/* ---------- Game save: top bar button, import windows, Settings › Game save ---------- */
+
+.save-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.save-button .glyph:last-child:not(:first-child) {
+  margin-left: -4px;
+}
+
+.save-menu {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--raised);
+  border: 1px solid var(--line-2);
+  border-top: 3px solid var(--mode);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.5);
+}
+
+.save-menu-head {
+  padding: 6px 12px 8px;
+  color: var(--faint);
+  font-size: 13px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+
+/* Phone menu row: label with the followed game under it, one button beside. */
+.save-sheet-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.save-sheet-text small {
+  color: var(--faint);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-sheet-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* Windows */
+.save-dialog {
+  width: min(620px, calc(100vw - 16px));
+}
+
+.save-dialog.wide {
+  width: min(900px, calc(100vw - 16px));
+}
+
+/* Where a window fills the screen (phones, narrow windows) the body takes the height and the foot stays at the bottom. */
+.save-body {
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 18px 20px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font: 500 15px / 1.4 var(--font-body);
+}
+
+.save-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.save-foot .primary-button {
+  white-space: nowrap;
+}
+
+.save-small {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.save-label {
+  font: 700 13px / 1 var(--font-display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.save-h {
+  margin: 0;
+  font: 700 20px / 1.2 var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.save-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.save-big {
+  padding: 14px 18px;
+  font-size: 18px;
+  justify-content: center;
+}
+
+.save-wide {
+  justify-content: center;
+}
+
+/* The place to drop a save: the two buttons sit inside it. */
+.save-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 26px 20px 22px;
+  text-align: center;
+  background: linear-gradient(180deg, var(--panel-2), var(--bg));
+  border: 2px dashed var(--line-2);
+  border-top: 4px solid var(--ficsit);
+  color: var(--dim);
+  font-size: 17px;
+}
+
+.save-drop[data-over] {
+  border-color: var(--ficsit);
+  background: var(--panel-2);
+  color: var(--ficsit);
+}
+
+.save-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  background: var(--bg);
+  border: 2px solid var(--ficsit);
+  color: var(--ficsit);
+}
+
+.save-drop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.save-where {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.save-path {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 6px 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.save-path b {
+  flex: none;
+  width: 108px;
+  color: var(--dim);
+  font-size: 14px;
+}
+
+.save-path code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--dim);
+  /* The app does not select text; the path must be selectable when the clipboard is refused. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.save-path .ghost-button {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 14px;
+}
+
+.save-safe {
+  margin: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--supply);
+  font-size: 13px;
+}
+
+.save-safe .glyph {
+  flex: none;
+}
+
+/* Picker: games down the side, the chosen game's saves beside. */
+.save-split {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+}
+
+.save-side {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  max-height: min(420px, 60vh);
+  overflow: auto;
+}
+
+.save-side-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 36px 12px 14px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--paper);
+  font: inherit;
+  text-align: left;
+}
+
+.save-side-row b {
+  overflow-wrap: anywhere;
+}
+
+.save-side-row small {
+  color: var(--faint);
+}
+
+.save-side-row[aria-checked='true'] {
+  background: var(--panel);
+  box-shadow: inset 4px 0 var(--ficsit);
+}
+
+.save-side-row .save-badge {
+  position: absolute;
+  right: 10px;
+  top: 12px;
+}
+
+.save-saves {
+  padding: 18px 20px;
+  max-height: min(420px, 60vh);
+  overflow: auto;
+}
+
+.save-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  font: 700 12px / 1.5 var(--font-body);
+  background: var(--raised);
+  color: var(--dim);
+  border-radius: 3px;
+}
+
+.save-badge.warn {
+  background: var(--power);
+  color: #241c00;
+}
+
+.save-warn {
+  margin: 0;
+  color: var(--power);
+  font-size: 14px;
+}
+
+.save-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.save-list-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.save-list-row:has(input:checked) {
+  border-color: var(--ficsit);
+}
+
+.save-list-row[data-off] {
+  opacity: 0.55;
+}
+
+.save-list-row input,
+.save-radio input {
+  accent-color: var(--ficsit);
+}
+
+.save-list-row b {
+  overflow-wrap: anywhere;
+}
+
+.save-list-row span {
+  color: var(--dim);
+  font-size: 13px;
+}
+
+/* The cover while a save is read. */
+.save-block {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+}
+
+.save-block::backdrop {
+  background: rgb(8 9 10 / 72%);
+  backdrop-filter: blur(3px);
+}
+
+.save-panel {
+  width: min(440px, calc(100vw - 32px));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-top: 4px solid var(--ficsit);
+  color: var(--paper);
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+
+.save-progress {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.save-progress li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--faint);
+}
+
+.save-progress li small {
+  margin-left: auto;
+  color: var(--ficsit);
+  font-weight: 700;
+}
+
+.save-progress li[data-state='done'] {
+  color: var(--dim);
+}
+
+.save-progress li[data-state='now'] {
+  color: var(--paper);
+  font-weight: 700;
+}
+
+.save-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--line-2);
+  border-radius: 50%;
+}
+
+li[data-state='done'] .save-mark {
+  background: var(--supply);
+  border-color: var(--supply);
+  color: #102000;
+}
+
+li[data-state='now'] .save-mark {
+  border-color: var(--ficsit);
+  border-top-color: transparent;
+  animation: save-spin 0.9s linear infinite;
+}
+
+@keyframes save-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.save-bar {
+  height: 8px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.save-bar span {
+  display: block;
+  height: 100%;
+  background: repeating-linear-gradient(135deg, var(--ficsit) 0 8px, var(--ficsit-deep) 8px 16px);
+  transition: width 0.2s;
+}
+
+/* Refresh: yours or the game's, line by line. */
+.save-radio {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* What came in, what did not. */
+.save-came {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.save-came li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.save-came .glyph {
+  flex: none;
+  margin-top: 3px;
+  color: var(--supply);
+}
+
+.save-came.not .glyph {
+  color: var(--alert);
+}
+
+.save-came.not li {
+  color: var(--dim);
+}
+
+/* Settings › Game save */
+.save-line {
+  padding: 4px 0 8px;
+  line-height: 1.8;
+}
+
+.save-line .text-button {
+  padding: 0;
+  font-size: 15px;
+}
+
+@media (max-width: 640px) {
+  .save-path {
+    flex-wrap: wrap;
+  }
+
+  .save-path b {
+    flex: 1;
+  }
+
+  .save-path code {
+    order: 3;
+    flex: 1 0 100%;
+  }
+
+  .save-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .save-side {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    max-height: none;
+  }
+
+  .save-side-row {
+    min-width: 150px;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .save-saves {
+    max-height: none;
+  }
+
+  .save-body,
+  .save-saves {
+    padding: 14px;
+  }
+
+  .save-split {
+    padding: 0;
+  }
+
+  .save-foot {
+    padding: 10px 14px;
+  }
+}
+
+/* The map: the followed save's factories and the picked-up filter. */
+.map-factory-label {
+  padding: 3px 8px;
+  background: #f2f0eb;
+  color: #1b1c1d;
+  border: 0;
+  border-radius: 3px;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.45);
+  font: 700 13px / 1.3 var(--font-body);
+  white-space: nowrap;
+}
+
+.map-factory-label::before {
+  border-top-color: #f2f0eb;
+}
+.map-pop-miner {
+  color: var(--ficsit);
+  font-weight: 700;
+}
+
+/* The map panel's card for what the save picked up: a total and a bar, and a fold with each find on its own. */
+.map-save {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.map-save-head,
+.map-save-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.map-save-title {
+  margin: 0;
+  font: 700 18px var(--font-body);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.map-save-game,
+.map-save-total small {
+  color: var(--faint);
+  font-size: 14px;
+}
+
+.map-save-total strong {
+  font-size: 22px;
+}
+
+.map-save-bar {
+  --ring: var(--ficsit);
+  display: block;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.map-save-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--ring);
+}
+
+.map-save-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font: 600 14px var(--font-body);
+  cursor: pointer;
+}
+
+.map-save-chevron {
+  width: 8px;
+  height: 8px;
+  margin: 0 4px 2px;
+  border: solid var(--faint);
+  border-width: 0 2px 2px 0;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease-out;
+}
+
+.map-save-more[aria-expanded='true'] .map-save-chevron {
+  margin: 2px 4px 0;
+  transform: rotate(45deg);
+}
+
+.map-save-more:hover .map-save-chevron {
+  border-color: var(--ficsit);
+}
+
+.map-save-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.map-save-rows li {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 2px 10px;
+}
+
+.map-save-rows .map-save-bar {
+  grid-column: 2 / -1;
+}
+
+.map-save-n {
+  color: var(--dim);
+  font: 700 13px var(--font-body);
+}
+
+.map-picked {
+  display: flex;
+}
+
+.map-picked button {
+  flex: 1;
+}
+
+/* All › From your save: a card for each factory in the save, its buildings, the tab it is linked to, its floor. */
+.save-list-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.save-list-head .glyph {
+  align-self: center;
+}
+
+.save-list-head small {
+  font: 500 15px var(--font-body);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--faint);
+}
+
+.save-list-head:hover {
+  color: var(--paper);
+}
+
+.save-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.save-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.save-card header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.save-card header span {
+  display: grid;
+  min-width: 0;
+}
+
+.save-card header b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 700 21px var(--font-display);
+}
+
+.save-card header small {
+  color: var(--faint);
+  font-size: 14px;
+}
+
+/* The link and the button sit on the card's last line, whatever is above them. */
+.save-card footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-top: auto;
+}
+
+/* All › From your save › Power circuits, under the factories. */
+.save-grids-title {
+  margin-top: 20px;
+}
+
+.save-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.save-counts li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.save-counts b {
+  font: 700 19px var(--font-display);
+}

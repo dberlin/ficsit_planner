@@ -103,13 +103,49 @@ function transportOf(x: unknown): Record<string, Route> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+const freshId = () => Math.random().toString(36).slice(2, 10);
+
+/**
+ * Tabs saved before a factory was Auto or Manual for good could hold both: a worked-out factory and a hand-built floor
+ * beside it. Each of those becomes two tabs, the Auto one first. The floor that was on screen keeps the tab's id, so
+ * what other tabs and power plants took from it still comes from the same place.
+ */
+export function splitFloors(saved: unknown[], fresh: () => string = freshId): unknown[] {
+  return saved.flatMap((x) => {
+    const p = obj(x);
+    const shown = p.floor === 'manual';
+    const built = list(obj(p.model).nodes).length > 0;
+    const worked = list(p.targets).length > 0 || list(p.supplies).length > 0;
+    // A hand-built floor with nothing on it is the floor it was, unless a factory was worked out beside it: that one is
+    // kept as Auto, or it would sit hidden in a Manual tab and go with the floor's first edit.
+    if (!built) {
+      if (shown && !worked) return [p];
+      const { floor: _f, model: _m, ...auto } = p;
+      return [auto];
+    }
+    // Nothing worked out beside it: a Manual factory.
+    if (!worked) return [{ ...p, floor: 'manual' }];
+    const { floor: _f, model: _m, ...auto } = structuredClone(p);
+    const { areas: _a, built: _b, ...manual } = structuredClone(p);
+    const name = text(p.name, 'Factory', 70);
+    return [
+      { ...auto, name, ...(shown ? { id: fresh() } : {}) },
+      { ...manual, name: `${name} (Manual)`, floor: 'manual', ...(shown ? {} : { id: fresh() }) },
+    ];
+  });
+}
+
 /** A factory tab, cleaned against the current game data. */
 export function cleanPlan(saved: unknown, fallback: Plan): Plan {
   const p = obj(saved);
-  const model = cleanModel(p.model);
-  const built = Array.isArray(p.built)
-    ? [...new Set(p.built.filter((id): id is string => typeof id === 'string' && recipeById.has(id)))]
-    : [];
+  // Only a Manual factory has a floor of its own.
+  const model = p.floor === 'manual' ? cleanModel(p.model) : undefined;
+  // The Auto floor's areas: only areas, no belts.
+  const drawn = cleanModel({ nodes: list(obj(p.areas).nodes).filter((n) => obj(n).k === 'group') });
+  const areas = drawn?.nodes.length ? { ...drawn, links: [] } : undefined;
+  const recipeList = (x: unknown) =>
+    Array.isArray(x) ? [...new Set(x.filter((id): id is string => typeof id === 'string' && recipeById.has(id)))] : [];
+  const built = recipeList(p.built);
   const aims = targets(p.targets ?? fallback.targets);
   // What each resource costs, as typed: a number from zero up.
   const weights = amounts(p.weights);
@@ -135,6 +171,7 @@ export function cleanPlan(saved: unknown, fallback: Plan): Plan {
     ...(transportOf(p.transport) ? { transport: transportOf(p.transport) } : {}),
     ...(p.floor === 'manual' ? { floor: 'manual' as const } : {}),
     ...(model ? { model } : {}),
+    ...(areas ? { areas } : {}),
     ...(built.length ? { built } : {}),
     ...(separate.length ? { separate } : {}),
     ...(pooled.length ? { pooled } : {}),
@@ -244,8 +281,8 @@ export function cleanSettings(saved: unknown): Settings {
     uiScale: scale('uiScale'),
     spacing: scale('spacing'),
     beltLabels: oneOf(s.beltLabels, ['auto', 'always', 'never'] as const, d.beltLabels),
+    areaLabels: oneOf(s.areaLabels, ['auto', 'always', 'never'] as const, d.areaLabels),
     autoBelts: oneOf(s.autoBelts, BELT_SHAPES, d.autoBelts),
-    autoSplitters: s.autoSplitters === true,
     beltMotion: typeof s.beltMotion === 'boolean' ? s.beltMotion : d.beltMotion,
     gridLines: typeof s.gridLines === 'boolean' ? s.gridLines : d.gridLines,
     addWith: oneOf(s.addWith, ['right', 'double'] as const, d.addWith),

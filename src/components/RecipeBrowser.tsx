@@ -1,8 +1,9 @@
+import { lockWords, skipKey } from '../lib/unlocks';
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { data, recipeTier, recipeUnlocked, type Recipe, type RecipeKind, type Stack } from '../lib/data';
+import { data, recipeLock, recipeTier, recipeUnlocked, type Recipe, type RecipeKind, type Stack } from '../lib/data';
 import { useT } from '../lib/i18n';
 import { recipeLabel, searchKey } from '../lib/text';
-import { MAX_TIER, useStore } from '../store';
+import { MAX_TIER, useStore, useTier } from '../store';
 import { Glyph } from './Glyph';
 import { Icon } from './Icon';
 import { Slot } from './Slot';
@@ -11,14 +12,12 @@ type Filter = 'all' | RecipeKind;
 
 const tiers = Array.from({ length: MAX_TIER + 1 }, (_, i) => i);
 
-const optionalKind = (r: Recipe) => r.kind === 'alternate' || r.kind === 'converter';
-
 interface Props {
   /** The recipes that are on, in the list being edited. */
   enabled: string[];
   onToggle: (id: string) => void;
   onSet: (ids: string[], on: boolean) => void;
-  /** The All page's list: alternate and converter recipes only, and the tier is set in the top bar. */
+  /** The All page's list: the tier is set in the top bar. */
   optionalOnly?: boolean;
   /** More buttons at the end of the row under the kinds. */
   extra?: ReactNode;
@@ -27,7 +26,7 @@ interface Props {
 /** Recipes grouped by what they make, each with a tick: the list a factory uses, or the one every new factory starts with. */
 export function RecipeBrowser({ enabled, onToggle: toggle, onSet: setRecipes, optionalOnly, extra }: Props) {
   const { t, name, num } = useT();
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const set = useStore((s) => s.set);
   const [filter, setFilter] = useState<Filter>('alternate');
   const [q, setQ] = useState('');
@@ -39,6 +38,7 @@ export function RecipeBrowser({ enabled, onToggle: toggle, onSet: setRecipes, op
   const on = useMemo(() => new Set(enabled), [enabled]);
 
   // Group by main product so every way to make screws sits together.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const listed = useMemo(() => {
     const f = searchKey(q.trim());
     const match = (r: Recipe) =>
@@ -46,7 +46,6 @@ export function RecipeBrowser({ enabled, onToggle: toggle, onSet: setRecipes, op
     const map = new Map<string, Recipe[]>();
     let hidden = 0;
     for (const r of data.recipes) {
-      if (optionalOnly && !optionalKind(r)) continue;
       if (filter !== 'all' && r.kind !== filter) continue;
       if (!match(r)) continue;
       // Recipes the player can't use yet stay out of the way unless asked for.
@@ -61,10 +60,10 @@ export function RecipeBrowser({ enabled, onToggle: toggle, onSet: setRecipes, op
     // A search that finds nothing under this filter may still find standard or converter recipes.
     const elsewhere =
       f && filter !== 'all' && sorted.length === 0
-        ? data.recipes.filter((r) => (!optionalOnly || optionalKind(r)) && match(r) && (showLocked || recipeUnlocked(r, tier))).length
+        ? data.recipes.filter((r) => match(r) && (showLocked || recipeUnlocked(r, tier))).length
         : 0;
     return { groups: sorted, hidden, elsewhere };
-  }, [filter, q, name, showLocked, tier, optionalOnly]);
+  }, [filter, q, name, showLocked, tier, skipKey()]);
   const { groups, hidden, elsewhere } = listed;
 
   // Bulk buttons leave recipes above the tier alone; those can't be picked one by one either.
@@ -103,12 +102,13 @@ export function RecipeBrowser({ enabled, onToggle: toggle, onSet: setRecipes, op
   });
 
   const row = (r: Recipe) => {
-    const locked = !recipeUnlocked(r, tier);
+    const lock = recipeLock(r, tier);
+    const locked = !!lock;
     return (
       <label
         key={r.id}
         className={`recipe-row ${on.has(r.id) ? 'on' : ''} ${locked ? 'locked' : ''}`}
-        title={locked ? t('needsTier', { tier: recipeTier(r) }) : undefined}
+        title={lock ? lockWords(lock, t) : undefined}
       >
         <input type="checkbox" checked={on.has(r.id)} disabled={locked} onChange={() => toggle(r.id)} />
         <span className="recipe-main">
@@ -145,7 +145,7 @@ export function RecipeBrowser({ enabled, onToggle: toggle, onSet: setRecipes, op
     );
   };
 
-  const kinds: Filter[] = optionalOnly ? ['alternate', 'converter', 'all'] : ['alternate', 'standard', 'converter', 'all'];
+  const kinds: Filter[] = ['alternate', 'standard', 'converter', 'all'];
 
   return (
     <div className="panel-body recipes">

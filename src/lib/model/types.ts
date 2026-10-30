@@ -28,7 +28,7 @@ interface Base {
   /** Top left corner on the floor. */
   x: number;
   y: number;
-  /** Ticked once it's built in the game. */
+  /** Ticked once it's built in the game: by the player, or by the game save the factory is linked to. */
   done?: true;
   /** The player's own name for it. */
   label?: string;
@@ -105,10 +105,14 @@ export interface NoteNode extends Base {
   h: number;
 }
 
+/** A coloured area drawn behind the cards on the floor: a name, a note, an item's icon and a colour, as #rrggbb. */
 export interface GroupNode extends Base {
   k: 'group';
   w: number;
   h: number;
+  color?: string;
+  note?: string;
+  icon?: string;
 }
 
 /** A node whose recipe or building left the game in an update: kept with its belts so nothing built by hand is lost. */
@@ -153,6 +157,8 @@ export interface MLink {
   lim?: number;
   /** Bends, in floor coordinates. */
   pts?: [number, number][];
+  /** The player laid the route: `pts` are their stops, kept when cards move and when the floor is tidied up. */
+  own?: true;
   /** Where its label sits, kept free for it when the floor was laid out. */
   lbl?: [number, number];
   /** Unset: straight runs with square turns. */

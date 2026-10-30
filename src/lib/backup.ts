@@ -1,30 +1,82 @@
-import { dropSource, newPlan, newPowerPlan, type Plan, POOL, type PowerPlan, useStore } from '../store';
-import { DRAFT_KEY } from './feedback';
-import { cleanPlan, cleanPowerPlan, cleanSettings, gridToPower } from './sanitize';
+import {
+  cleanStandardOff,
+  cleanUnlocked,
+  dropSource,
+  MAX_TIER,
+  newPlan,
+  newPowerPlan,
+  type Plan,
+  POOL,
+  type PowerPlan,
+  useStore,
+} from '../store';
+import { clearBackups } from './autobackup';
+import { forgetSave } from './save/store-idb';
+import { planStorage } from './safeStorage';
+import { cleanNumber, cleanPlan, cleanPowerPlan, cleanSettings, gridToPower, splitFloors } from './sanitize';
 import { DEFAULT_SETTINGS, sameSettings } from './settings';
+import { cleanSkipped } from './unlocks';
 
 export const KIND = 'ficsit-planner';
+/** What a file made by buildExport says it is; before 3 a factory could hold an Auto and a Manual floor at once. */
+export const FILE_VERSION = 3;
 
-/** Everything this app keeps in the browser: the saved session and an unsent report. */
-export function wipeLocal() {
-  for (const key of [KIND, DRAFT_KEY]) {
-    try {
-      localStorage.removeItem(key);
-    } catch {}
-  }
+/** Everything this app keeps in the browser: the saved session, the answers to its questions, an unsent report, the saved copies, the game save. */
+export async function wipeLocal() {
+  // The plans may still be waiting to be written; drop them too, or leaving the page would put them back.
+  planStorage.storage.removeItem(KIND);
+  try {
+    for (const key of Object.keys(localStorage)) if (key.startsWith('ficsit-')) localStorage.removeItem(key);
+  } catch {}
+  await clearBackups();
+  await forgetSave();
 }
 
 /** Everything worth keeping in one file: factories, power plants and the settings. */
-export function exportAll() {
+export function buildExport() {
   const s = useStore.getState();
-  const file = {
+  return {
     kind: KIND,
-    version: 2,
+    version: FILE_VERSION,
     exported: new Date().toISOString(),
     plans: s.plans,
     power: s.power,
     settings: s.settings,
+    tier: s.tier,
+    unlocked: s.unlocked,
+    standardOff: s.standardOff,
+    skipped: s.skipped,
   };
+}
+
+/** How far the player has got: the tier, the milestones not bought and the alternate recipes unlocked. */
+export type Progress = { tier: number; skipped: string[]; unlocked: string[]; standardOff?: string[] };
+
+/** The progress a file carries, checked like a saved session; undefined for older files that have none. */
+function progressOf(file: { tier?: unknown; skipped?: unknown; unlocked?: unknown; standardOff?: unknown }): Progress | undefined {
+  if (typeof file.tier !== 'number') return undefined;
+  return {
+    tier: Math.round(cleanNumber(file.tier, 0, MAX_TIER, 0)),
+    skipped: cleanSkipped(file.skipped),
+    unlocked: cleanUnlocked(file.unlocked),
+    // Files from before the switch have none: the player's own list stays.
+    ...(Array.isArray(file.standardOff) ? { standardOff: cleanStandardOff(file.standardOff) } : {}),
+  };
+}
+
+const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
+
+/** Puts a file's progress in place of the player's own; only ever called from the button that offers it. */
+export const applyProgress = (p: Progress) =>
+  useStore.setState({ tier: p.tier, skipped: p.skipped, unlocked: p.unlocked, ...(p.standardOff ? { standardOff: p.standardOff } : {}) });
+export type ExportFile = ReturnType<typeof buildExport>;
+
+/** Whether a copy holds anything worth keeping: a factory with something in it, a plant, a hand-built floor. */
+export const hasPlans = (f: Pick<ExportFile, 'plans' | 'power'>) =>
+  f.plans.some((p) => p.targets.length > 0 || p.supplies.length > 0 || !!p.model?.nodes.length) || f.power.some((p) => p.plants.length > 0);
+
+export function exportAll() {
+  const file = buildExport();
   const blob = new Blob([JSON.stringify(file, null, 1)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -37,13 +89,15 @@ export function exportAll() {
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 type Taken = 'loaded' | 'kept' | 'none';
-export type ImportResult = { ok: true; count: number; power: number; settings: Taken; plans: string[]; plants: string[] } | { ok: false };
+export type ImportResult =
+  | { ok: true; count: number; power: number; settings: Taken; plans: string[]; plants: string[]; progress?: Progress }
+  | { ok: false };
 
 /** A power plant nobody has set up: no generators, still waiting for its first one. */
 const untouchedPower = (list: PowerPlan[]) => list.length === 1 && list[0].plants.length === 0 && !!list[0].autoName;
 
 /** A factory nobody has started: nothing to make and nothing on hand. */
-const blankPlans = (list: Plan[]) => list.length === 1 && list[0].targets.length === 0 && list[0].supplies.length === 0;
+const blankPlans = (list: Plan[]) => list.length === 1 && !list[0].floor && list[0].targets.length === 0 && list[0].supplies.length === 0;
 
 /**
  * Adds a file's factories and power plants as new tabs (they never replace yours, except an empty
@@ -61,26 +115,45 @@ export async function importFile(f: File): Promise<ImportResult> {
 /** Adds what a backup file or a shared link carries, as new tabs; see importFile. */
 export function importData(parsed: unknown): ImportResult {
   try {
-    const file = parsed as { kind?: unknown; plans?: unknown; power?: unknown; grid?: unknown; settings?: unknown };
+    const file = parsed as {
+      kind?: unknown;
+      version?: unknown;
+      plans?: unknown;
+      power?: unknown;
+      grid?: unknown;
+      settings?: unknown;
+      tier?: unknown;
+      skipped?: unknown;
+      unlocked?: unknown;
+      standardOff?: unknown;
+    };
     if (file?.kind !== KIND || !Array.isArray(file.plans)) return { ok: false };
     const s = useStore.getState();
     // Tabs get fresh ids so they can't clash with yours; the plants' lists of factories follow them.
     const ids = new Map<string, string>();
-    const cleaned: Plan[] = file.plans.map((p: unknown) => {
+    // A file from before a factory was Auto or Manual for good has its two floors split into two tabs first, so both get new ids.
+    const old = typeof file.version !== 'number' || file.version < FILE_VERSION;
+    const cleaned: Plan[] = (old ? splitFloors(file.plans) : file.plans).map((p: unknown) => {
       const plan = cleanPlan(p, newPlan('Factory'));
       const id = uid();
       ids.set(plan.id, id);
       return { ...plan, id };
     });
     // Taken from a factory in the same file: follows its new id. From one that didn't come along: just on hand.
+    // A factory that took from itself (a hand-edited file) is just on hand: no tab feeds itself.
+    const follow = <T extends { from?: string }>(x: T, own: string): T => {
+      if (!x.from || x.from === POOL) return x;
+      const { from: _, ...rest } = x;
+      return ids.get(x.from) === own ? (rest as T) : { ...x, from: ids.get(x.from)! };
+    };
     const added = dropSource(cleaned, (from) => !ids.has(from)).map((p) => ({
       ...p,
-      supplies: p.supplies.map((x) => (x.from && x.from !== POOL ? { ...x, from: ids.get(x.from)! } : x)),
+      supplies: p.supplies.map((x) => follow(x, p.id)),
       ...(p.model
         ? {
             model: {
               ...p.model,
-              nodes: p.model.nodes.map((n) => (n.k === 'in' && n.from && n.from !== POOL ? { ...n, from: ids.get(n.from)! } : n)),
+              nodes: p.model.nodes.map((n) => (n.k === 'in' ? follow(n, p.id) : n)),
             },
           }
         : {}),
@@ -117,8 +190,19 @@ export function importData(parsed: unknown): ImportResult {
       active: added[0]?.id ?? s.active,
       inspect: undefined,
     });
+    // Offered, never applied here: a copy from another day shouldn't change what the player has unlocked on its own.
+    const theirs = progressOf(file);
+    const progress =
+      theirs &&
+      (theirs.tier !== s.tier ||
+        !same(theirs.skipped, s.skipped) ||
+        !same(theirs.unlocked, s.unlocked) ||
+        (!!theirs.standardOff && !same(theirs.standardOff, s.standardOff)))
+        ? theirs
+        : undefined;
     return {
       ok: true,
+      progress,
       count: added.length,
       power: power.length,
       settings: takeSettings ? 'loaded' : settingsIn ? 'kept' : 'none',

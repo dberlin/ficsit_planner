@@ -45,6 +45,8 @@ import './styles/game-look.css';
 import './styles/machine-console.css';
 import './styles/folding.css';
 import './styles/hand-build-floor.css';
+import './styles/game-save.css';
+import './styles/calculator.css';
 
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';

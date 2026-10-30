@@ -325,14 +325,6 @@
   color: var(--alert);
 }
 
-.share-button.copied .glyph {
-  color: var(--supply);
-}
-
-.share-button.failed {
-  border-color: var(--alert);
-}
-
 /* Drag handle on the panel's bottom edge. */
 /* The grab strip sits just outside the panel, on the floor side, so it never shares room with the panel's scrollbar. */
 .splitter {
@@ -368,4 +360,36 @@
 
 .resizing {
   cursor: row-resize;
+}
+
+/* Auto or Manual, in front of a factory's name. Both tags are the same size. */
+.kind-tag {
+  flex: none;
+  box-sizing: border-box;
+  width: 5.9em;
+  padding: 1px 0;
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  color: var(--faint);
+  font: 600 10px / 1.3 var(--font-body);
+  letter-spacing: 0.06em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.kind-tag.manual {
+  border-color: var(--ficsit);
+  color: var(--ficsit);
+}
+
+.ov-name .kind-tag {
+  margin-right: 10px;
+  vertical-align: middle;
+}
+
+/* The name needs the room on a phone; the list shows the kind there. */
+@media (max-width: 600px) {
+  .plan-current .kind-tag {
+    display: none;
+  }
 }

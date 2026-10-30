@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { data, type Generator } from '../lib/data';
 import { useT } from '../lib/i18n';
+import { isOpen, lockOf, lockText } from '../lib/unlocks';
 import { clockable, fuelRate, generatorOf, MAX_CLOCK, PLANT_OPTIONS, plantIdOf, sizable, unitPower } from '../lib/power';
 import type { PowerLoad } from '../lib/solution';
 import { shardsFor, type SolveResult } from '../lib/solver';
-import { activePowerPlan, useStore } from '../store';
+import { activePowerPlan, useStore, useTier } from '../store';
 import { Glyph } from './Glyph';
 import { Icon } from './Icon';
 import { MissingList } from './MissingList';
@@ -83,7 +84,8 @@ export function PowerSummary({
 
   return (
     <div className="summary power-summary">
-      <div className="readouts">
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling area has to be reachable by keyboard */}
+      <div className="readouts" tabIndex={0}>
         <div className={`readout balance ${short ? 'short' : thin ? 'thin' : 'ok'}`}>
           <span className="readout-label">{have ? t('forTheGrid') : short ? t('gridShort') : t('covers')}</span>
           <span className="readout-value">
@@ -153,7 +155,7 @@ export function PlantInspector({ result }: { result: SolveResult }) {
   const g = generatorOf(plant);
   const mw = result.grid?.plants[plant.id] ?? 0;
   const clock = draft ?? plant.clock;
-  const shards = Math.max(0, ...use.clocks.map(shardsFor));
+  const shards = use.clocks.reduce((m, c) => Math.max(m, shardsFor(c)), 0);
   const commitClock = (c: number) => {
     clearTimeout(settle.current);
     setDraft(undefined);
@@ -266,7 +268,7 @@ export function PlantInspector({ result }: { result: SolveResult }) {
 export function PowerQuickStart({ load }: { load: PowerLoad }) {
   const hide = useStore((s) => !s.settings.showLocked);
   const { t, name, num } = useT();
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const addPlant = useStore((s) => s.addPlant);
   const set = useStore((s) => s.set);
   const sizeBy = useStore((s) => activePowerPlan(s).sizeBy);
@@ -290,9 +292,10 @@ export function PowerQuickStart({ load }: { load: PowerLoad }) {
         )}
         <div className="gen-grid">
           {data.generators
-            .filter((g) => !hide || g.tier <= tier)
+            .filter((g) => !hide || isOpen(g, tier))
             .map((g) => {
-              const locked = g.tier > tier;
+              const lock = lockOf(g, tier);
+              const locked = !!lock;
               const fuels = PLANT_OPTIONS.filter((o) => o.generator === g && o.fuel);
               const body = (
                 <>
@@ -302,7 +305,7 @@ export function PowerQuickStart({ load }: { load: PowerLoad }) {
                       {name(g)}
                       <small>{g.kind === 'geothermal' ? t('geyserRange') : `${num(g.power)} MW`}</small>
                     </span>
-                    {locked && <span className="tier-tag">{t('tierTag', { tier: g.tier })}</span>}
+                    {lock && <span className="tier-tag">{lockText(lock, (n) => t('tierTag', { tier: n }))}</span>}
                   </span>
                 </>
               );

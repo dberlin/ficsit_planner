@@ -19,6 +19,7 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 
 - **Dragging a machine** no longer turns its belts into curves: they follow the Belt shape setting (square, curved or
   straight).
+- **Milestone changes during a background solve** no longer cache the answer with a miner unlocked under a different milestone selection.
 
 ### Changed
 
@@ -32,7 +33,118 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
   mergers keep their three ends, belts side by side still enter through an end as wide as they are, a belt running
   back against the flow is still marked with its ↺, lines of their own still stand one after the other, and a factory
   whose cards and belts are the same as before (a number changed) is placed again at once without laying it out.
-- **The Manual floor says "Laying out"** while converting a factory, Rebuild or Tidy up work, instead of "Solving".
+- **Upstream 0.14.3 integrated:** item-icon card ends, product-chain areas and balanced splitter trees use the ELK layout;
+  Auto and Manual factories remain separate, with the belt-tier, layout-effort and machine-clock settings retained.
+- **The Manual floor says "Laying out"** while Tidy up works, instead of "Solving".
+
+## 0.14.3 — 2026-10-29
+
+### Added
+
+- Auto floor: every machine card has an end for each item it takes and gives, with the item's icon, as on the Manual floor. Each belt goes into its own item's end, the ends are ordered so belts don't cross, and a card grows when its ends need room.
+
+### Changed
+
+- Machine panel: on a line run as machines at 100% and one slower, the clock slider and field rest at 100% and say so, instead of showing an average that could not be set back.
+
+### Fixed
+
+- Card ends lap over the card's side on both floors, so a round pipe end is joined to its card instead of floating beside it.
+- Manual floor: the + of a belt routed by hand with no stops yet sits on the belt, not at an empty corner.
+- A shared link is checked for size while it unpacks, so a small link can no longer swell into memory and freeze the tab.
+- A game save whose chunks claim more than a compressed chunk can hold, or unpack to more than they claim, is refused as damaged before any memory is set aside for it.
+
+## 0.14.2 — 2026-10-28
+
+### Added
+
+- A new factory is asked for as Auto or Manual: the + button opens a small menu with the two. The list under the tabs has the same two buttons.
+- Every factory carries a small tag in front of its name, AUTO (grey) or MANUAL (orange), on its tab, in the factory list and on the All page.
+- Auto floor: a product built from two others gets an area of its own, with the machines that work only towards it, and a product on a line of its own gets one too.
+- All page: a Materials side panel lists the parts and buildings every factory needs to build, and which factory needs how much. Machines ticked as built are left out unless asked for.
+- Manual floor: belts and pipes can be routed by hand. A Route switch in the belt panel, stop points to drag, + to add one and a double click to remove one. They stay through Tidy up and moving cards; Tidy up gives them back to Automatic.
+- A calculator window: C or a small icon in the top bar opens it. It shrinks to a bar with the last result, has number pad keys and a history.
+
+### Changed
+
+- Auto and Manual are now two kinds of factory that stay apart. The Auto|Manual switch, Rebuild, the question about a new Manual floor and the copying of an Auto factory onto a Manual floor are gone. “Build by hand” stays on an empty Auto factory and turns it into a Manual one.
+- Factories that held both floors are split when you open the app: “Name” keeps the Auto floor and “Name (Manual)” gets the Manual floor. Old backup files and share links are split the same way when you import or open them.
+- Auto floor: the splitters and mergers are always drawn, as balanced trees like on the Manual floor, so the setting “Splitters and mergers” is gone. Fit to screen also works on floors with cards off screen.
+- Auto floor: each product chain stands together as a cluster, and the areas round the chains no longer run into each other. The areas lie over the belts, so no belt crosses an area's name.
+- Machines on a line run whole at 100% with one slower machine, unless Settings › Machines on a line says otherwise.
+
+### Fixed
+
+- Codex “Build this factory” and importing a backup no longer overwrite a Manual factory that has cards but no output cards.
+- Machine panel: a typed clock speed is applied when the field is left, so 75 stays 75, and clicking in and out of the field no longer changes the machine count.
+- Undo after closing a tab puts the tab back without undoing what was done since.
+- A line of millions of machines no longer crashes. Small numbers never print as -0.
+- Materials counts the machines a card per destination adds.
+
+## 0.14.1 — 2026-10-22
+
+### Added
+
+- Manual floor: the colour wheel takes a typed hex code too.
+- Settings › Game save: “Refresh takes” says whether Refresh reads the latest save of yours or the latest autosave.
+
+### Changed
+
+- Tier window: a new look. The phases sit in one strip, the tiers on a line that runs orange up to the one you chose, and what the tier opens and its milestones are in one panel below.
+- Big factories freeze much less when you change a number or click a card. On a 3,200-machine factory, with the processor slowed down to test, the longest freeze went from about 2.8 s to 0.6 s. Opening Settings or Report no longer redraws the whole app, and in the power planner it no longer builds the floor again.
+- While a window such as Settings is open, the belts behind it stand still.
+- Auto backups no longer load every saved copy a minute after you open the app or when you leave the page; they only look at the copies’ times until one is due.
+
+### Fixed
+
+- Auto floor: the belts no longer jump by a pixel every time the animation loops.
+
+## 0.14.0 — 2026-10-22
+
+### Added
+
+- Import save: read your Satisfactory save and bring your game into the planner. The button is in the top bar (on a phone, “Game save” in the ⋯ menu). The window copies the save folder’s path for you and shows the steps for Windows, macOS (CrossOver), Linux (Steam Proton) and phones. Choose the folder, one .sav file, or drop it on the window. Pick the game and its newest save is chosen for you, by the date inside the save. Nothing leaves your computer: the save stays in this browser, is left out of backup files and share links, and Delete everything removes it. Thanks to Hot-Category2986 and BouBouRziPorC.
+- Import save: the first time, you say what the save may set. Tier and the milestones you skipped, your alternate recipes (turned on in every factory), and your Somersloops and power shards, free and in machines. The result lists what came in and what did not, with the reason (FICSMAS recipes, alternates this version does not know).
+- Settings › Game save: the save you follow, Refresh from the game, Change, Forget, and a switch for each thing the save may set. Refresh asks, line by line, about anything you changed yourself since the last import: yours or the game’s.
+- Map: a “Your save” card with how many Somersloops, Mercer Spheres, slugs and hard drives you picked up, of how many there are. Picked up: Grey, Hide or Normal, and Details lists each find. Nodes with a miner get a ring as far round as the miner’s clock, and clicking one says “Miner Mk.2 · 150%”.
+- Map: the factories in your save are boxed with a dashed line and named after what they make; click one for its buildings. They are a guess from how far buildings stand apart and how long the belts between them run, so a big factory may show as two, or two close ones as one. The HUB, Space Elevator, MAM, AWESOME Shop and Radar Towers are marked too.
+- All › From your save: a card for each power circuit with generators, with what it makes and draws, its generators and batteries. “Make a power plant tab” opens a plant tab with the same generators, fuel and clock speeds.
+
+### Changed
+
+- All › Unlocked recipes: the standard recipes can be turned off now, not just the alternates. New factories start with that list, and backup files carry it.
+- Manual floor, on a tablet or phone: a card’s name button is easier to tap. Settings: the titles of folded sections wrap instead of being cut short.
+
+### Fixed
+
+- Manual floor: Escape closes the menu you get by right-clicking a card.
+
+## 0.13.36 — 2026-10-16
+
+### Added
+
+- Tier window: tick off the milestones you have not bought. The ones of the chosen tier are in view, earlier tiers are folded away. What a skipped milestone opens (belts, buildings, miners, plants, vehicles, recipes) stays locked on both floors, locked tags name the milestone, and a missing part offers “Mark as bought”. The top bar says “Tier 5 · 1 off”. Thanks to clem.
+- Backups: the backup file also carries your tier, the milestones you have not bought and your unlocked alternates. Loading a file or restoring a copy offers to use that progress and changes nothing unless you press it. Share links do not carry it.
+- Auto backups: the app quietly keeps the last three copies of your factories, a new one every 6 hours. Settings › Your data lists them with a Restore button, and Delete everything clears them too.
+- Auto floor: draw, name, colour, move and resize areas behind the cards, the way the Manual floor does. Hold the right button and drag.
+- Manual floor: hold the right button and drag to draw a coloured area with a name, a note, an icon and any colour. It moves with the cards inside it, resizes from its corners and copies with them. Settings has an Area names choice.
+- Manual floor: an output card has a “To the pool” button.
+- Manual floor: copied cards go to the real clipboard, so they paste in another tab, after a reload and in another window.
+- Factory tab menu: “Copy factory” copies a link to the factory. Pasting it into the app, anywhere outside a field, opens it as a new tab, even a very long one. It replaces the Share button.
+- All › Unlocked recipes: a Standard filter lists the standard recipes, shown on.
+
+### Changed
+
+- Floor: Factory, List and Transport are one dropdown instead of three buttons.
+- Machine panel: its title stays at the top while the rest scrolls, and on a small floor it grows up to the top bar instead of ending short. On the Manual floor the direction arrows and Fit to screen step aside while it is open.
+- Delete everything also clears the automatic backups, your answers to the app’s questions and the Codex pages you looked at last.
+
+### Fixed
+
+- The same factory shows the same power and machine count in the totals strip, the factory menu and the All page. Numbers from 1000 up have no decimals.
+- Manual floor: an item that comes in more than once (Uranium Waste) is one row and one card with a round amount.
+- Lists: the bottom buttons no longer cover the last rows of List and Transport.
+- The Map no longer logs an error when you leave it while zooming.
 
 ## 0.13.35 — 2026-10-11
 

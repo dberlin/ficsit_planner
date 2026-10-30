@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { activePowerPlan, defaultEnabled, type Plan, type PowerPlan, poweredBy, useStore } from '../store';
-import { importData, KIND } from './backup';
+import { FILE_VERSION, importData, KIND } from './backup';
+import { readCapped } from './capped';
 
 /*
   A shared link carries a factory (or a power plant) in the part of the address after '#', which the
@@ -56,9 +57,12 @@ const fromBase64Url = (text: string) => {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 };
 
-async function through(bytes: Uint8Array, stream: CompressionStream | DecompressionStream): Promise<Uint8Array> {
-  const out = new Blob([bytes as BlobPart]).stream().pipeThrough(stream);
-  return new Uint8Array(await new Response(out).arrayBuffer());
+async function through(
+  bytes: Uint8Array,
+  stream: CompressionStream | DecompressionStream,
+  max = Number.POSITIVE_INFINITY,
+): Promise<Uint8Array> {
+  return readCapped(new Blob([bytes as BlobPart]).stream().pipeThrough(stream), max);
 }
 
 /** 'z' + deflated, or 'j' + plain where the browser can't compress. */
@@ -72,7 +76,9 @@ export async function encode(value: unknown): Promise<string> {
 export async function decode(text: string, max = MAX_LINK): Promise<unknown> {
   if (text.length > max) throw new Error('too long');
   const bytes = fromBase64Url(text.slice(1));
-  const raw = text[0] === 'z' ? await through(bytes, new DecompressionStream('deflate-raw')) : text[0] === 'j' ? bytes : undefined;
+  // The size is checked while unpacking, so a tiny link can't swell into memory first.
+  const raw =
+    text[0] === 'z' ? await through(bytes, new DecompressionStream('deflate-raw'), MAX_TEXT) : text[0] === 'j' ? bytes : undefined;
   if (!raw || raw.length > MAX_TEXT) throw new Error('unreadable');
   return JSON.parse(new TextDecoder().decode(raw));
 }
@@ -82,7 +88,7 @@ export async function shareLink(): Promise<string> {
   const { plans, power } = sharedTabs();
   const body = {
     kind: KIND,
-    v: 1,
+    v: 2,
     from: useStore.getState().mode === 'power' ? 'power' : 'factory',
     plans: plans.map(pack),
     power: power.map((pp) => ({ ...pp, chain: pack(pp.chain) })),
@@ -102,7 +108,7 @@ export async function moveLink(): Promise<string | undefined> {
   const s = useStore.getState();
   const body = {
     kind: KIND,
-    v: 1,
+    v: 2,
     from: 'factory',
     plans: s.plans.map(pack),
     power: s.power.filter((pp) => pp.plants.length > 0).map((pp) => ({ ...pp, chain: pack(pp.chain) })),
@@ -121,21 +127,10 @@ export function hasWork(): boolean {
   );
 }
 
-/** Copies the link, or hands it to the phone's share sheet; says which happened. */
-export async function shareTab(name: string): Promise<'copied' | 'shared' | 'failed'> {
+/** Copies the link to the tab on screen to the clipboard, never to a share sheet; pasting it into the app opens the factory as a new tab. */
+export async function copyTab(): Promise<'copied' | 'failed'> {
   try {
-    const url = await shareLink();
-    const phone = matchMedia('(pointer: coarse)').matches;
-    if (phone && navigator.share) {
-      try {
-        await navigator.share({ title: `${name} · FICSIT Planner`, url });
-        return 'shared';
-      } catch (e) {
-        // Closing the sheet isn't a failure; anything else falls back to copying.
-        if ((e as Error).name === 'AbortError') return 'shared';
-      }
-    }
-    await navigator.clipboard.writeText(url);
+    await navigator.clipboard.writeText(await shareLink());
     return 'copied';
   } catch {
     return 'failed';
@@ -148,6 +143,7 @@ export async function openShared(hash: string, max?: number): Promise<boolean> {
     const body = (await decode(hash.slice(SHARE_HASH.length), max)) as {
       kind?: unknown;
       from?: unknown;
+      v?: unknown;
       plans?: unknown;
       power?: unknown;
       settings?: unknown;
@@ -157,7 +153,15 @@ export async function openShared(hash: string, max?: number): Promise<boolean> {
       ? body.power.map((pp) => (pp && typeof pp === 'object' ? { ...pp, chain: unpack((pp as { chain?: unknown }).chain) } : pp))
       : [];
     // Settings come along only in a link made to move everything; they are cleaned like a backup's, and yours stay if you changed them.
-    const r = importData({ kind: KIND, plans: body.plans.map(unpack), power, ...(body.settings ? { settings: body.settings } : {}) });
+    // Links made before a factory was Auto or Manual for good say v 1.
+    const version = typeof body.v === 'number' && body.v >= 2 ? FILE_VERSION : 2;
+    const r = importData({
+      kind: KIND,
+      version,
+      plans: body.plans.map(unpack),
+      power,
+      ...(body.settings ? { settings: body.settings } : {}),
+    });
     if (!r.ok || (r.count === 0 && r.power === 0)) return false;
     const s = useStore.getState();
     // A plant's link opens on the plant; a factory's on the factory.

@@ -1,3 +1,4 @@
+import { skipKey } from '../lib/unlocks';
 import { Fragment, useMemo, useState } from 'react';
 import { buildingById, data } from '../lib/data';
 import type { ExtractionUse } from '../lib/extraction';
@@ -5,53 +6,36 @@ import { useT } from '../lib/i18n';
 import { plantIdOf } from '../lib/power';
 import { recipeLabel } from '../lib/text';
 import type { RecipeUse, SolveResult } from '../lib/solver';
-import { useStore } from '../store';
+import { useStore, useTier } from '../store';
 import { groupClocks } from '../lib/clocks';
+import { buildBill } from '../lib/materials';
 import { buildGroups, groupsLabel, isPipe } from '../lib/groups';
 import { matchFlows, splitByDestination, splitExtras } from '../lib/split';
 import { Icon } from './Icon';
 import { Slot } from './Slot';
 import { useSplitText } from './SplitText';
 
-/** Buildings to place and the parts they cost, summed across the whole plan. */
-function buildBill(result: SolveResult, extraction: ExtractionUse[], extra?: Map<string, number>) {
-  const buildings = new Map<string, number>();
-  const add = (id: string, n: number) => buildings.set(id, (buildings.get(id) ?? 0) + n);
-  for (const u of result.recipes) add(u.recipe.machine, u.built);
-  // With a card per destination on the floor, the machines those cards add are built too.
-  for (const [id, n] of extra ?? []) add(id, n);
-  for (const e of extraction) add(e.extractor.id, e.built);
-
-  const parts = new Map<string, number>();
-  for (const [id, n] of buildings) {
-    const cost = buildingById(id)?.cost ?? [];
-    for (const c of cost) parts.set(c.item, (parts.get(c.item) ?? 0) + c.amount * n);
-  }
-  return {
-    buildings: [...buildings].sort((a, b) => b[1] - a[1]),
-    parts: [...parts].filter(([id]) => data.items[id]).sort((a, b) => b[1] - a[1]),
-  };
-}
-
 export function TableView({ result, extraction }: { result: SolveResult; extraction: ExtractionUse[] }) {
   const { t, name, num } = useT();
   const inspect = useStore((s) => s.inspect);
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const set = useStore((s) => s.set);
   const generated = result.grid?.plants ?? {};
   // On a hand-built floor each node is its own row, already split however the player built it.
   const manual = 'manual' in result;
   const each = useStore((s) => s.settings.splitLines) === 'each' && !manual;
   const rowId = (u: RecipeUse) => u.node ?? u.recipe.id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const bill = useMemo(
     () => buildBill(result, extraction, each ? splitExtras(result, tier).machines : undefined),
-    [result, extraction, each, tier],
+    [result, extraction, each, tier, skipKey()],
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const splits = useMemo(() => {
     if (manual) return new Map<string, undefined>();
     const flows = matchFlows(result);
     return new Map(result.recipes.map((u) => [u.recipe.id, splitByDestination(u, flows, tier)]));
-  }, [result, tier, manual]);
+  }, [result, tier, manual, skipKey()]);
   const words = useSplitText();
 
   // What the pointer is on, else the selected line: its inputs light up where other lines make them, and its
@@ -89,7 +73,8 @@ export function TableView({ result, extraction }: { result: SolveResult; extract
     ));
 
   return (
-    <div className="table-wrap">
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling area has to be reachable by keyboard
+    <div className="table-wrap" tabIndex={0}>
       <table className="plan-table">
         <thead>
           <tr>

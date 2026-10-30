@@ -1,6 +1,15 @@
 import type { Edge, Node } from '@xyflow/react';
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api';
+import { chains } from './autoAreas';
 import {
+  cardBox,
+  type CardEnds,
+  END,
+  END_REACH,
+  growCards,
+  machineEnds,
+  type MachineNodeData,
+  setCardEnds,
   type Direction,
   type FlowEdgeData,
   type Graph,
@@ -71,7 +80,7 @@ const LOOP_STUB = 30;
  * bottom), and say so in `data.side` for the stylesheet. Wide ends take their whole width. Splitters and mergers
  * keep the building's size. New node objects; the built ones are untouched.
  */
-function roomForPorts(graph: Graph, dir: Direction): Graph {
+function roomForPorts(graph: Graph, dir: Direction, opts: LayoutOptions = {}): Graph {
   const sides = new Map<string, { in: number[]; out: number[] }>();
   const side = (id: string) => sides.get(id) ?? sides.set(id, { in: [], out: [] }).get(id)!;
   for (const e of graph.edges) {
@@ -82,9 +91,11 @@ function roomForPorts(graph: Graph, dir: Direction): Graph {
   const along = dir === 'LR' ? 'height' : 'width';
   const nodes = graph.nodes.map((n) => {
     if (n.type === 'logistic') return n;
+    if (n.type === 'machine') return { ...n };
     const need = Math.max(room(sides.get(n.id)?.in), room(sides.get(n.id)?.out));
     return need <= (n[along] ?? 0) ? n : { ...n, [along]: need, data: { ...n.data, side: need } };
   });
+  growCards(nodes, graph.edges, (size) => cardBox(size, opts.scale ?? 1, opts.text ?? 1), opts.scale ?? 1, dir);
   return { nodes, edges: graph.edges };
 }
 
@@ -113,6 +124,8 @@ export function elkOptions(opts: LayoutOptions, dir: Direction, seed: number): R
     'elk.layered.spacing.edgeNodeBetweenLayers': belt,
     'elk.edgeLabels.placement': 'CENTER',
     'elk.padding': '[top=30,left=30,bottom=30,right=30]',
+    'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+    'elk.spacing.portPort': String(8 * (opts.scale ?? 1)),
   };
 }
 
@@ -122,6 +135,7 @@ export function toElk(graph: Graph, opts: LayoutOptions, dir: Direction, seed: n
   const label = { width: Math.round(LABEL.width * text), height: Math.round(LABEL.height * text) };
   const [inSide, outSide] = dir === 'LR' ? ['WEST', 'EAST'] : ['NORTH', 'SOUTH'];
   const ports = new Map<string, ElkPort[]>(graph.nodes.map((n) => [n.id, []]));
+  const cards = machineEnds(graph.nodes, graph.edges, dir, opts.scale ?? 1);
   // A wide end is a port as long as its belts side by side, so ELK keeps room along the side for all of them.
   const port = (id: string, side: string, size = 0): ElkPort => ({
     id,
@@ -129,19 +143,45 @@ export function toElk(graph: Graph, opts: LayoutOptions, dir: Direction, seed: n
     layoutOptions: { 'elk.port.side': side },
   });
   for (const e of graph.edges) {
-    ports.get(e.source)?.push(port(e.sourceHandle!, outSide, portSize(e, 'from')));
-    ports.get(e.target)?.push(port(e.targetHandle!, inSide, portSize(e, 'to')));
+    if (!cards.has(e.source)) ports.get(e.source)?.push(port(e.sourceHandle!, outSide, portSize(e, 'from')));
+    if (!cards.has(e.target)) ports.get(e.target)?.push(port(e.targetHandle!, inSide, portSize(e, 'to')));
   }
+  for (const [id, card] of cards) {
+    for (const [side, row] of [
+      [inSide, card.in],
+      [outSide, card.out],
+    ] as const) {
+      for (const end of row) {
+        const square = END * (opts.scale ?? 1);
+        ports.get(id)!.push({
+          ...port(end.id, side, end.len),
+          ...(dir === 'LR' ? { width: square } : { height: square }),
+          layoutOptions: { 'elk.port.side': side, 'elk.port.borderOffset': String(-2 * (opts.scale ?? 1)) },
+        });
+      }
+    }
+  }
+  const children: ElkNode[] = graph.nodes.map((n) => ({
+    id: n.id,
+    width: n.width,
+    height: n.height,
+    ports: ports.get(n.id),
+    layoutOptions: { 'elk.portConstraints': 'FIXED_SIDE' },
+  }));
+  const groups = graph.nodes.some((n) => n.type === 'power') ? new Map<string, string[]>() : chains(graph.nodes, graph.edges);
+  const byId = new Map(children.map((n) => [n.id, n]));
+  const grouped = new Set([...groups.values()].flat());
   return {
     id: 'root',
     layoutOptions: elkOptions(opts, dir, seed),
-    children: graph.nodes.map((n) => ({
-      id: n.id,
-      width: n.width,
-      height: n.height,
-      ports: ports.get(n.id),
-      layoutOptions: { 'elk.portConstraints': 'FIXED_SIDE' },
-    })),
+    children: [
+      ...children.filter((n) => !grouped.has(n.id)),
+      ...[...groups].map(([root, ids]) => ({
+        id: `chain:${root}`,
+        children: ids.map((id) => byId.get(id)!),
+        layoutOptions: { ...elkOptions(opts, dir, seed), 'elk.padding': '[top=40,left=20,bottom=20,right=20]' },
+      })),
+    ],
     edges: graph.edges.map(
       (e): ElkExtendedEdge => ({
         id: e.id,
@@ -161,9 +201,13 @@ export function toElk(graph: Graph, opts: LayoutOptions, dir: Direction, seed: n
 export interface Placement {
   dir: Direction;
   routing: EdgeRouting;
+  scale: number;
   width: number;
   height: number;
-  nodes: Map<string, { x: number; y: number; width: number; height: number; side?: number; ports: Port[] }>;
+  nodes: Map<
+    string,
+    { x: number; y: number; width: number; height: number; side?: number; room?: MachineNodeData['room']; ends?: CardEnds; ports: Port[] }
+  >;
   edges: Map<string, { sourceHandle: string; targetHandle: string; points: Point[]; label: Point; loop?: Point }>;
 }
 
@@ -198,10 +242,37 @@ function moveStart(points: Point[], at: Point, dir: Direction, routing: EdgeRout
 }
 
 /** The arrangement ELK came back with, made the floor's: ports on the cards, splitters' belts on their ends, loops marked. */
-function placementOf(graph: Graph, laid: ElkNode, dir: Direction, routing: EdgeRouting): Placement {
+function placementOf(graph: Graph, laid: ElkNode, dir: Direction, routing: EdgeRouting, scale: number): Placement {
   const uv = uvOf(dir);
   const xy = xyOf(dir);
-  const placed = new Map((laid.children ?? []).map((c) => [c.id, c]));
+  const placed = new Map<string, ElkNode>();
+  const routed = new Map<string, ElkExtendedEdge>();
+  const collect = (parent: ElkNode, dx: number, dy: number) => {
+    for (const c of parent.children ?? []) {
+      const x = dx + (c.x ?? 0);
+      const y = dy + (c.y ?? 0);
+      placed.set(c.id, { ...c, x, y });
+      collect(c, x, y);
+    }
+    for (const e of parent.edges ?? []) {
+      const edge = e as ElkExtendedEdge;
+      const container = edge.container ? placed.get(edge.container) : undefined;
+      const ox = container?.x ?? dx;
+      const oy = container?.y ?? dy;
+      routed.set(e.id, {
+        ...edge,
+        sections: edge.sections?.map((s) => ({
+          ...s,
+          startPoint: { x: s.startPoint.x + ox, y: s.startPoint.y + oy },
+          endPoint: { x: s.endPoint.x + ox, y: s.endPoint.y + oy },
+          bendPoints: s.bendPoints?.map((p) => ({ x: p.x + ox, y: p.y + oy })),
+        })),
+        labels: edge.labels?.map((l) => ({ ...l, x: (l.x ?? 0) + ox, y: (l.y ?? 0) + oy })),
+      });
+    }
+  };
+  collect(laid, 0, 0);
+  const cards = machineEnds(graph.nodes, graph.edges, dir, scale);
   const offsetOf = new Map<string, number>();
   const nodes: Placement['nodes'] = new Map();
   for (const n of graph.nodes) {
@@ -212,15 +283,39 @@ function placementOf(graph: Graph, laid: ElkNode, dir: Direction, routing: EdgeR
       offsetOf.set(p.id, offset);
       return { id: p.id, type: p.id.endsWith(':out') ? 'source' : 'target', offset, ...(size ? { size } : {}) };
     });
-    const { side } = n.data as { side?: number };
-    nodes.set(n.id, { x: c?.x ?? 0, y: c?.y ?? 0, width: n.width ?? 0, height: n.height ?? 0, ...(side ? { side } : {}), ports });
+    const { side, room } = n.data as MachineNodeData & { side?: number };
+    const width = c?.width ?? n.width ?? 0;
+    const height = c?.height ?? n.height ?? 0;
+    const card = cards.get(n.id);
+    if (card) {
+      for (const end of [...card.in, ...card.out]) end.at = (offsetOf.get(end.id) ?? 0) / (dir === 'LR' ? height : width);
+    }
+    nodes.set(n.id, {
+      x: c?.x ?? 0,
+      y: c?.y ?? 0,
+      width,
+      height,
+      ...(side ? { side } : {}),
+      ...(room ? { room } : {}),
+      ...(card ? { ends: card } : {}),
+      ports,
+    });
   }
-  const routed = new Map((laid.edges ?? []).map((e) => [e.id, e as ElkExtendedEdge]));
   const edges: Placement['edges'] = new Map();
   for (const e of graph.edges) {
-    const s = routed.get(e.id)?.sections?.[0];
-    if (!s) continue;
-    const points = [s.startPoint, ...(s.bendPoints ?? []), s.endPoint].map((p) => ({ x: p.x, y: p.y }));
+    const sections = routed.get(e.id)?.sections ?? [];
+    let section = sections.find((s) => !s.incomingSections?.length);
+    if (!section) continue;
+    const points: Point[] = [];
+    const visited = new Set<string>();
+    while (section && !visited.has(section.id)) {
+      visited.add(section.id);
+      const last = points.at(-1);
+      if (!last || last.x !== section.startPoint.x || last.y !== section.startPoint.y) points.push({ ...section.startPoint });
+      points.push(...(section.bendPoints ?? []).map((p) => ({ ...p })), { ...section.endPoint });
+      const next: string | undefined = section.outgoingSections?.[0];
+      section = next ? sections.find((s) => s.id === next) : undefined;
+    }
     const l = routed.get(e.id)?.labels?.[0];
     const label = l ? { x: (l.x ?? 0) + (l.width ?? 0) / 2, y: (l.y ?? 0) + (l.height ?? 0) / 2 } : points[Math.floor(points.length / 2)];
     edges.set(e.id, { sourceHandle: e.sourceHandle!, targetHandle: e.targetHandle!, points, label });
@@ -259,6 +354,49 @@ function placementOf(graph: Graph, laid: ElkNode, dir: Direction, routing: EdgeR
     at.ports = [];
   }
 
+  // ELK minimizes crossings over layers, not the order of the neighbouring cards' centres. Restore the item-end
+  // contract after placement: inputs from above meet upper ends, and outputs to above leave upper ends. As with
+  // logistics, keep ELK's route and move only its approach onto the reordered, correctly sized end.
+  const beltAt = new Map<string, Edge>();
+  for (const e of graph.edges) {
+    beltAt.set(e.sourceHandle!, e);
+    beltAt.set(e.targetHandle!, e);
+  }
+  for (const n of graph.nodes) {
+    const at = nodes.get(n.id)!;
+    if (!at.ends) continue;
+    const along = dir === 'LR' ? at.height : at.width;
+    const [u, v] = uv(at);
+    const [du] = uv({ x: at.width, y: at.height });
+    for (const side of ['in', 'out'] as const) {
+      const row = at.ends[side];
+      if (row.length < 2) continue;
+      const ordered = row
+        .map((end) => {
+          const belt = beltAt.get(end.id);
+          const far = belt && nodes.get(side === 'in' ? belt.source : belt.target);
+          const across = far ? uv(far)[1] + (dir === 'LR' ? far.height : far.width) / 2 : Number.POSITIVE_INFINITY;
+          return { end, belt, across };
+        })
+        .sort((a, b) => (a.across === b.across ? 0 : a.across - b.across));
+      if (ordered.every(({ end }, i) => i === 0 || end.at > ordered[i - 1].end.at)) continue;
+      const gap = (along - row.reduce((sum, end) => sum + end.len, 0)) / (row.length + 1);
+      let offset = gap;
+      for (const { end, belt } of ordered) {
+        end.at = (offset + end.len / 2) / along;
+        offset += end.len + gap;
+        const route = belt && edges.get(belt.id);
+        if (!route) continue;
+        const spot = xy(side === 'in' ? u - END_REACH * scale : u + du + END_REACH * scale, v + end.at * along);
+        route.points =
+          side === 'in'
+            ? moveStart([...route.points].reverse(), spot, dir, routing).reverse()
+            : moveStart(route.points, spot, dir, routing);
+      }
+      at.ends[side] = ordered.map(({ end }) => end);
+    }
+  }
+
   // Belts that run back against the flow (water out of a later machine into an earlier one) are marked, with the spot
   // just before their input where they climb into it.
   const kind = new Map(graph.edges.map((e) => [e.id, e.type]));
@@ -272,7 +410,7 @@ function placementOf(graph: Graph, laid: ElkNode, dir: Direction, routing: EdgeR
     const end = uv(r.points.at(-1)!);
     r.loop = xy(end[0] - LOOP_STUB, end[1]);
   }
-  return { dir, routing, width: laid.width ?? 0, height: laid.height ?? 0, nodes, edges };
+  return { dir, routing, scale, width: laid.width ?? 0, height: laid.height ?? 0, nodes, edges };
 }
 
 /** The built graph placed as `p` has it: new node and edge objects, the built ones untouched. */
@@ -286,7 +424,10 @@ function applyPlacement(graph: Graph, p: Placement): Floor {
       height: at?.height ?? n.height,
       ...(at?.side ? { data: { ...n.data, side: at.side } } : {}),
     };
+    if (at?.room) node.data = { ...node.data, room: { ...at.room } };
     if (n.type === 'logistic') node.handles = logisticHandles(node, p.dir);
+    else if (at?.ends)
+      setCardEnds(node, { in: at.ends.in.map((e) => ({ ...e })), out: at.ends.out.map((e) => ({ ...e })) }, p.dir, p.scale);
     else
       setPorts(
         node,
@@ -369,13 +510,13 @@ async function arrangeIn(graph: Graph, opts: LayoutOptions, dir: Direction, engi
   const key = keyOf(graph, opts, dir);
   const hit = placements.get(key);
   if (hit) return hit;
-  const sized = roomForPorts(graph, dir);
+  const sized = roomForPorts(graph, dir, opts);
   const routing = opts.routing ?? 'ORTHOGONAL';
   const tries = graph.nodes.length + graph.edges.length > BIG ? 1 : EFFORT_SEEDS[opts.effort ?? 'balanced'];
   const seeds = Array.from({ length: tries }, (_, i) => i + 1);
   const runs = await Promise.all(
     seeds.map(async (seed) => {
-      const placement = placementOf(sized, await engine(toElk(sized, opts, dir, seed), isStale), dir, routing);
+      const placement = placementOf(sized, await engine(toElk(sized, opts, dir, seed), isStale), dir, routing, opts.scale ?? 1);
       return { placement, floor: applyPlacement(sized, placement) };
     }),
   );
@@ -486,13 +627,16 @@ export function cachedLayout(graph: Graph, opts: LayoutOptions): Floor | undefin
 }
 
 /** When no layout engine works: cards in a plain grid in build order, belts as plain paths between their handles. */
-export function gridLayout(built: Graph, dir: Direction): Floor {
-  const graph = roomForPorts(built, dir);
+export function gridLayout(built: Graph, dir: Direction, opts: LayoutOptions = {}): Floor {
+  const graph = roomForPorts(built, dir, opts);
   const cols = Math.max(1, Math.ceil(Math.sqrt(graph.nodes.length)));
   const cellW = Math.max(0, ...graph.nodes.map((n) => n.width ?? 0)) + 80;
   const cellH = Math.max(0, ...graph.nodes.map((n) => n.height ?? 0)) + 80;
   const nodes = graph.nodes.map((n, i) => ({ ...n, position: { x: (i % cols) * cellW, y: Math.floor(i / cols) * cellH } }));
   spreadPorts(nodes, graph.edges, dir);
+  for (const [id, card] of machineEnds(nodes, graph.edges, dir, opts.scale ?? 1)) {
+    setCardEnds(nodes.find((n) => n.id === id)!, card, dir, opts.scale ?? 1);
+  }
   // A splitter's or merger's belts take its ends in turn.
   const edges = graph.edges.map((e) => ({ ...e }));
   for (const n of nodes) {

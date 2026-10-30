@@ -8,7 +8,7 @@ import { groupClocks } from '../lib/clocks';
 import { buildGroups, groupsLabel, isPipe } from '../lib/groups';
 import { amplification, NO_MOD, shardsFor, type SolveResult } from '../lib/solver';
 import { matchFlows, splitByDestination } from '../lib/split';
-import { toggleBuilt, usePlan, useStore } from '../store';
+import { toggleBuilt, usePlan, useStore, useTier } from '../store';
 import { Balancer } from './Balancer';
 import { Icon } from './Icon';
 import { RateInput } from './RateInput';
@@ -21,7 +21,7 @@ const EPS = 1e-6;
 export function Inspector({ result }: { result: SolveResult }) {
   const { t, name, num } = useT();
   const inspect = useStore((s) => s.inspect);
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const set = useStore((s) => s.set);
   const setMod = useStore((s) => s.setMod);
   const updatePlan = useStore((s) => s.updatePlan);
@@ -47,7 +47,7 @@ export function Inspector({ result }: { result: SolveResult }) {
   const machine = data.machines[recipe.machine];
   const mod = plan.mods[recipe.id] ?? NO_MOD;
   // Slots show the busiest machine; the label gives the real total across the line.
-  const shards = Math.max(0, ...use.clocks.map(shardsFor));
+  const shards = use.clocks.reduce((m, c) => Math.max(m, shardsFor(c)), 0);
   const amp = amplification(recipe, mod);
   const change = (patch: Partial<typeof mod>) => setMod(recipe.id, { ...mod, ...patch });
 
@@ -73,7 +73,9 @@ export function Inspector({ result }: { result: SolveResult }) {
   };
   const groups = buildGroups(use, tier);
   const split = splitByDestination(use, flows, tier);
-  const clock = draft && draft.id === recipe.id && draft.from === use.clock ? draft.value : use.clock;
+  // A line with a single slower machine has no one clock to move; the machine stepper is how it leaves that.
+  const locked = use.spread === 'single' && use.clock <= 1 + EPS && groupClocks(use.clocks).length > 1;
+  const clock = locked ? Math.min(1, use.mod.clock) : draft && draft.id === recipe.id && draft.from === use.clock ? draft.value : use.clock;
 
   return (
     <aside className="inspector" aria-label={name(recipe)}>
@@ -113,6 +115,7 @@ export function Inspector({ result }: { result: SolveResult }) {
             min={1}
             max={MAX_CLOCK * 100}
             step={1}
+            disabled={locked}
             value={Math.round(clock * 100)}
             onChange={(e) => setDraft({ value: Number(e.target.value) / 100, id: recipe.id, from: use.clock })}
             onPointerUp={() => setClock(clock)}
@@ -122,10 +125,13 @@ export function Inspector({ result }: { result: SolveResult }) {
           <RateInput
             value={Math.round(clock * 10000) / 100}
             label={t('clockSpeed')}
+            deferred
+            disabled={locked}
             onChange={(n) => setClock(Math.min(MAX_CLOCK, n / 100))}
           />
           <span className="unit">%</span>
         </div>
+        {locked && <span className="slot-label">{t('clockSpreadSingle')}</span>}
         <div className="shard-slots" role="img" aria-label={`${t('shards')}: ${shards}`}>
           {[0, 1, 2].map((i) => (
             <span key={i} className={`shard-slot ${i < shards ? 'filled' : ''}`} />
@@ -242,7 +248,7 @@ export function Inspector({ result }: { result: SolveResult }) {
 function RecipeChoices({ item, result }: { item: string; result: SolveResult }) {
   const { t, name } = useT();
   const plan = usePlan();
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const toggleRecipe = useStore((s) => s.toggleRecipe);
   const codex = useCodex();
   // The comparisons are worked out at the game's default part cost; under another one they'd mislead.

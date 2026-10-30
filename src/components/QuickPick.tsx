@@ -1,9 +1,10 @@
+import { lockText, skipKey } from '../lib/unlocks';
 import { useMemo, useState } from 'react';
-import { craftableItems, data, itemLocked, itemTier, SPECIAL_ITEMS } from '../lib/data';
+import { craftableItems, data, itemLock, itemLocked, SPECIAL_ITEMS } from '../lib/data';
 import { useT } from '../lib/i18n';
-import { laterMatches } from '../lib/later';
+import { laterMatches, laterText } from '../lib/later';
 import { searchKey } from '../lib/text';
-import { useStore } from '../store';
+import { useStore, useTier } from '../store';
 import { Glyph } from './Glyph';
 import { Slot } from './Slot';
 
@@ -35,16 +36,17 @@ const RESULTS = 30;
 /** First-run screen: what to make, a search over every item, and shortcuts to the usual goals. */
 export function QuickPick() {
   const { t, name } = useT();
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   // Set to hide what isn't unlocked yet: those leave the shortcuts and the search.
   const hide = useStore((s) => !s.settings.showLocked);
   const shown = (ids: string[]) => (hide ? ids.filter((id) => !itemLocked(id, tier)) : ids);
   const set = useStore((s) => s.set);
   const updatePlan = useStore((s) => s.updatePlan);
-  const setFloor = useStore((s) => s.setFloor);
+  const makeManual = useStore((s) => s.makeManual);
   const active = useStore((s) => s.active);
   const [q, setQ] = useState('');
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const matches = useMemo(() => {
     const f = searchKey(q.trim());
     if (!f) return [];
@@ -58,8 +60,9 @@ export function QuickPick() {
           name(a).localeCompare(name(b)),
       )
       .slice(0, RESULTS);
-  }, [q, name, hide, tier]);
+  }, [q, name, hide, tier, skipKey()]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const later = useMemo(
     () =>
       hide && q.trim()
@@ -67,9 +70,10 @@ export function QuickPick() {
             q,
             craftableItems.filter((i) => itemLocked(i.id, tier)),
             name,
+            tier,
           )
         : [],
-    [q, name, hide, tier],
+    [q, name, hide, tier, skipKey()],
   );
 
   const add = (item: string, rate: number) => {
@@ -81,13 +85,13 @@ export function QuickPick() {
     <div className="quick-grid">
       {shown(ids).map((id) => {
         // Above the unlocked tier: still pickable, but say when it opens up.
-        const needs = itemTier(id);
-        const locked = needs !== undefined && needs > tier;
+        const lock = itemLock(id, tier);
+        const locked = !!lock;
         return (
           <button key={id} type="button" className={`quick-item ${locked ? 'locked' : ''}`} onClick={() => add(id, rate)}>
             <Slot id={id} size={72} />
             <span>{name(data.items[id])}</span>
-            {locked && <span className="tier-tag">{t('tierTag', { tier: needs })}</span>}
+            {lock && <span className="tier-tag">{lockText(lock, (n) => t('tierTag', { tier: n }))}</span>}
           </button>
         );
       })}
@@ -105,7 +109,7 @@ export function QuickPick() {
             className="build-by-hand"
             title={t('manualHint')}
             onClick={() => {
-              setFloor(active, 'manual');
+              makeManual(active);
               set({ view: 'graph' });
             }}
           >
@@ -133,16 +137,12 @@ export function QuickPick() {
                 10,
               )}
               {later.length > 0 && (
-                <p className="hint">
-                  {t('notInTierYet', { list: later.map((x) => `${name(x.item)} (${t('tierTag', { tier: x.tier })})`).join(', ') })}
-                </p>
+                <p className="hint">{t('notInTierYet', { list: laterText(later, name, (n) => t('tierTag', { tier: n })) })}</p>
               )}
             </>
           ) : (
             <p className="hint">
-              {later.length
-                ? t('notInTierYet', { list: later.map((x) => `${name(x.item)} (${t('tierTag', { tier: x.tier })})`).join(', ') })
-                : t('noResults')}
+              {later.length ? t('notInTierYet', { list: laterText(later, name, (n) => t('tierTag', { tier: n })) }) : t('noResults')}
             </p>
           )
         ) : (

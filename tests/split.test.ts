@@ -179,7 +179,17 @@ describe('a card per destination on the graph', () => {
     expect(ids).toContain('recipe:Recipe_IngotIron_C~0');
     expect(ids).toContain('recipe:Recipe_IngotIron_C~1');
     expect(ids).not.toContain('recipe:Recipe_IngotIron_C');
-    const belt = (from: string, to: string) => edges.find((e) => e.source === from && e.target === to)?.data?.rate as number | undefined;
+    const logistics = new Set(nodes.filter((n) => n.type === 'logistic').map((n) => n.id));
+    const belt = (from: string, to: string): number | undefined => {
+      for (const e of edges.filter((e) => e.source === from)) {
+        if (e.target === to) return e.data?.rate as number;
+        if (logistics.has(e.target)) {
+          const rate = belt(e.target, to);
+          if (rate !== undefined) return rate;
+        }
+      }
+      return undefined;
+    };
     expect(belt('raw:Desc_OreIron_C', 'recipe:Recipe_IngotIron_C~0')).toBeCloseTo(73.55, 4);
     expect(belt('raw:Desc_OreIron_C', 'recipe:Recipe_IngotIron_C~1')).toBeCloseTo(46.45, 4);
     expect(belt('recipe:Recipe_IngotIron_C~0', 'recipe:Recipe_IronRod_C')).toBeCloseTo(73.55, 4);
@@ -194,7 +204,10 @@ describe('a card per destination on the graph', () => {
     expect(rods.length).toBeGreaterThan(1);
     expect(nodes.map((n) => n.id)).toContain('recipe:Recipe_IngotIron_C~1');
     const out = edges.filter((e) => rods.includes(e.source) && (e.data as { item: string }).item === 'Desc_IronIngot_C');
-    expect(out.every((e) => e.target.startsWith('recipe:Recipe_IronRod_C'))).toBe(true);
+    const logistics = new Set(nodes.filter((n) => n.type === 'logistic').map((n) => n.id));
+    const destinations = (id: string): string[] =>
+      logistics.has(id) ? edges.filter((e) => e.source === id).flatMap((e) => destinations(e.target)) : [id];
+    expect(out.flatMap((e) => destinations(e.target)).every((id) => id.startsWith('recipe:Recipe_IronRod_C'))).toBe(true);
     expect(out.every((e) => (e.data as { rate: number }).rate <= 60 + 1e-6)).toBe(true);
     expect(sum(out.map((e) => (e.data as { rate: number }).rate))).toBeCloseTo(73.55, 4);
   });
@@ -214,11 +227,12 @@ describe('a card per destination on the graph', () => {
       resourceCaps: {},
       objective: 'resources',
     });
-    const one = buildGraph(r, 9, { splitLines: 'one' }).edges;
-    const each = buildGraph(r, 9, { splitLines: 'each' }).edges;
-    const total = (edges: typeof one) => {
+    const one = buildGraph(r, 9, { splitLines: 'one' });
+    const each = buildGraph(r, 9, { splitLines: 'each' });
+    const total = ({ nodes, edges }: typeof one) => {
+      const producers = new Set(nodes.filter((n) => n.type !== 'logistic').map((n) => n.id));
       const by = new Map<string, number>();
-      for (const e of edges) {
+      for (const e of edges.filter((e) => producers.has(e.source))) {
         const d = e.data as { item: string; rate: number };
         by.set(d.item, (by.get(d.item) ?? 0) + d.rate);
       }

@@ -1,5 +1,5 @@
 // Goes through the hand-built floor the way a player would, step by step, and checks each step both on screen and in
-// the saved model: turning a worked-out factory into a manual one, moving cards, laying and removing belts, the
+// the saved model: opening a prepared Manual factory, moving cards, laying and removing belts, the
 // panels, undo, the build menu, open ends, tidying up, and the same on a phone with taps.
 //
 //   bun run build && node e2e/modeler.mjs
@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { preview } from 'vite';
+import { manualModel } from './manual.mjs';
 
 const OUT = path.resolve('e2e/out/modeler');
 fs.rmSync(OUT, { recursive: true, force: true });
@@ -16,12 +17,31 @@ fs.mkdirSync(OUT, { recursive: true });
 
 const still = { beltMotion: false, motion: 'reduce' };
 const saved = (state) =>
-  JSON.stringify({ state: { onboarded: true, tier: 9, lang: 'en', ...state, settings: { ...still, ...state.settings } }, version: 3 });
-const factory = (targets, extra = {}) =>
+  JSON.stringify({ state: { onboarded: true, tier: 9, lang: 'en', ...state, settings: { ...still, ...state.settings } }, version: 4 });
+const factory = (targets, extra = {}, settings = {}) =>
   saved({
     mode: 'factory',
     plans: [{ id: 'f1', name: 'Factory 1', targets: targets.map(([item, rate]) => ({ item, rate })), ...extra }],
     active: 'f1',
+    settings,
+  });
+// A Manual factory with the floor of the factory worked out for these targets on it.
+// plan and state: more to put on the tab and in the saved session.
+const manual = (targets, { plan = {}, state = {}, separate = [] } = {}) =>
+  saved({
+    mode: 'factory',
+    plans: [
+      {
+        id: 'f1',
+        name: 'Factory 1',
+        targets: targets.map(([item, rate]) => ({ item, rate })),
+        floor: 'manual',
+        model: manualModel(targets, separate),
+        ...plan,
+      },
+    ],
+    active: 'f1',
+    ...state,
   });
 const blank = saved({ mode: 'factory', plans: [{ id: 'f1', name: 'Factory 1', targets: [] }], active: 'f1' });
 
@@ -81,6 +101,43 @@ const fit = async () => {
 };
 const settle = () => page.waitForFunction(() => !document.querySelector('.busy'), null, { timeout: 20000 }).then(() => wait(300));
 
+/**
+ * Every end a card draws stands on its card, and every belt or pipe starts and stops inside an end: what the floor draws,
+ * what the layout declared and where the belts run agree. Returns what is off.
+ */
+const endsAgree = () =>
+  page.evaluate(() => {
+    const ends = [...document.querySelectorAll('.react-flow__handle')].map((h) => ({
+      r: h.getBoundingClientRect(),
+      node: h.closest('.react-flow__node'),
+      port: h.classList.contains('port'),
+    }));
+    const apart = [];
+    for (const { r, node, port } of ends) {
+      const n = node?.getBoundingClientRect();
+      if (!n || !port) continue;
+      // The square laps over the card's side by a pixel or two, so a round pipe end is joined to it, not touching at a point.
+      const gap = Math.max(n.left - r.right, r.left - n.right, n.top - r.bottom, r.top - n.bottom);
+      const lap = Math.min(r.right - n.left, n.right - r.left, r.bottom - n.top, n.bottom - r.top);
+      if (gap > -1 || (lap > 30 && Math.max(r.width, r.height) < 40))
+        apart.push(`${node.dataset.id} ${Math.round(gap)}/${Math.round(lap)}`);
+    }
+    const loose = [];
+    let belts = 0;
+    for (const e of document.querySelectorAll('.react-flow__edge')) {
+      const p = e.querySelector('path');
+      const nums = (p?.getAttribute('d') ?? '').match(/-?[\d.]+(?:e-?\d+)?/g)?.map(Number) ?? [];
+      if (nums.length < 4) continue;
+      belts++;
+      const m = p.getScreenCTM();
+      const at = (x, y) => ({ x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f });
+      const [a, b] = [at(nums[0], nums[1]), at(nums.at(-2), nums.at(-1))];
+      const inside = (q) => ends.some(({ r }) => q.x >= r.left - 4 && q.x <= r.right + 4 && q.y >= r.top - 4 && q.y <= r.bottom + 4);
+      if (!inside(a) || !inside(b)) loose.push(e.getAttribute('data-id'));
+    }
+    return { ends: ends.filter((x) => x.port).length, belts, apart, loose };
+  });
+
 async function open(state) {
   await page.goto(URL);
   await page.evaluate((s) => {
@@ -132,10 +189,20 @@ async function addHere(prefer = 'right') {
   await wait(300);
 }
 
+/** The view menu along the bottom of the floor: Factory 0, List 1, Transport 2. */
+async function pickView(idx) {
+  await page.locator('.floor-bar .view-menu button').click();
+  await wait(200);
+  await page.locator('.card-menu [role=menuitem]').nth(idx).click();
+}
+
 /** Cards drawn on top of each other. */
 const overlaps = () =>
   page.evaluate(() => {
-    const boxes = [...document.querySelectorAll('.react-flow__node')].map((n) => ({ id: n.dataset.id, r: n.getBoundingClientRect() }));
+    const boxes = [...document.querySelectorAll('.react-flow__node:not(.react-flow__node-area)')].map((n) => ({
+      id: n.dataset.id,
+      r: n.getBoundingClientRect(),
+    }));
     const hits = [];
     for (let i = 0; i < boxes.length; i++)
       for (let j = i + 1; j < boxes.length; j++) {
@@ -204,9 +271,9 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   // ── A0: square belts on the Auto floor ──
   section = 'A0';
   const beltPaths = () => page.$$eval('.react-flow__edge path', (l) => l.map((p) => p.getAttribute('d') ?? ''));
-  await open(factory([['Desc_Motor_C', 10]]));
+  await open(factory([['Desc_Motor_C', 10]], {}, { autoBelts: 'curve' }));
   const curved = await beltPaths();
-  ok('curved belts by default', curved.length > 0 && curved.some((d) => /C/.test(d)));
+  ok('curved belts follow the selected shape', curved.length > 0 && curved.some((d) => /C/.test(d)));
   await open(
     saved({
       mode: 'factory',
@@ -222,11 +289,66 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     `${squared.length} belts`,
   );
 
-  // ── A1: Auto to Manual ──
-  section = 'A1';
+  // A belt into an output card ends on the card's own end, level with it, not at the card's top.
+  await open(
+    factory([
+      ['Desc_IronRod_C', 10],
+      ['Desc_IronPlate_C', 10],
+    ]),
+  );
+  await wait(1500);
+  const ends = await page.evaluate(() =>
+    [...document.querySelectorAll('.react-flow__edge')]
+      .filter((e) => e.dataset.id?.includes('>target:'))
+      .map((e) => {
+        const id = e.dataset.id.split('>')[1];
+        const node = document.querySelector(`[data-id="${id}"]`);
+        const [x, y] = node.style.transform.match(/-?[\d.]+/g).map(Number);
+        const d = e.querySelector('path').getAttribute('d');
+        const [lx, ly] = d
+          .match(/-?[\d.]+/g)
+          .slice(-2)
+          .map(Number);
+        return { dx: Math.abs(lx - x), dy: ly - y, h: node.offsetHeight };
+      }),
+  );
+  ok(
+    'Auto: belts into output cards end at the card end, not its top',
+    ends.length === 2 && ends.every((e) => e.dx < 12 && e.dy > 10 && e.dy < e.h - 10),
+    JSON.stringify(ends),
+  );
+
+  // The chevrons of a curved belt lie along it: inside the box the belt's own path spans.
+  await open(factory([['Desc_Motor_C', 10]], {}, { autoBelts: 'curve' }));
+  await wait(1500);
+  const strays = await page.evaluate(() => {
+    const box = (d) => {
+      const n = d.match(/-?[\d.]+/g).map(Number);
+      const xs = n.filter((_, i) => i % 2 === 0);
+      const ys = n.filter((_, i) => i % 2 === 1);
+      return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    };
+    let arrows = 0;
+    let off = 0;
+    for (const e of document.querySelectorAll('.react-flow__edge')) {
+      const a = e.querySelector('.belt-arrows');
+      const rails = e.querySelector('.belt-rails');
+      if (!a || !rails || !a.getAttribute('d')) continue;
+      arrows++;
+      const [x0, x1, y0, y1] = box(rails.getAttribute('d'));
+      const [ax0, ax1, ay0, ay1] = box(a.getAttribute('d'));
+      if (ax0 < x0 - 8 || ax1 > x1 + 8 || ay0 < y0 - 8 || ay1 > y1 + 8) off++;
+    }
+    return { arrows, off };
+  });
+  ok('chevrons stay on their belts', strays.arrows > 0 && strays.off === 0, JSON.stringify(strays));
+
+  // ── A1a: ticking a machine built on the Auto floor ──
+  section = 'A1a';
   await open(factory([['Desc_Motor_C', 10]]));
   await page.click('.deck-toggle');
   await wait(600);
+  await fit();
   // A double click on an Auto machine ticks it built (no panel opens); a single click opens its panel with the box ticked.
   await page.locator('.react-flow__node-machine .machine-node').first().dblclick();
   await wait(600);
@@ -235,11 +357,80 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   await page.locator('.react-flow__node-machine .machine-node').first().click();
   await wait(600);
   ok('a single click opens the panel, with the built box ticked', (await page.locator('.inspector .built-check.on').count()) === 1);
+  // A line whose machines run at different clocks (100% and one slower) has its clock slider locked at 100.
+  const line = (await page.locator('aside.inspector .inspector-stats dd').first().textContent()) ?? '';
+  const slider = page.locator('aside.inspector .clock-control input[type=range]');
+  const mixed = line.includes(',');
+  const locked = await slider.isDisabled();
+  ok(
+    'the clock slider is locked at 100 exactly when the line has more than one clock group',
+    locked === mixed && (!locked || (await slider.inputValue()) === '100'),
+    `machines "${line}", locked ${locked}`,
+  );
+  await shot('a1a-clock');
   await page.keyboard.press('Escape');
-  const autoRaw = await page.$$eval('.readout.wide input', (l) => l.map((i) => i.value));
-  const autoMachines = await page.locator('.readout-value').nth(1).innerText();
-  await page.click('.floor-kind button >> nth=1');
+
+  // ── A1b: an Auto machine has an end for each item it takes ──
+  section = 'A1b';
+  await open(factory([['Desc_Stator_C', 5]]));
+  await page.click('.deck-toggle');
+  await wait(600);
+  const motor = card('recipe:Recipe_Stator_C');
+  const ins = motor.locator('.react-flow__handle.port.in');
+  const icons = await ins.evaluateAll((hs) => hs.map((h) => h.querySelector('img')?.getAttribute('src') ?? ''));
+  ok(
+    'the Stator assembler has two input ends',
+    (await ins.count()) === 2 && (await motor.locator('.react-flow__handle.port.out').count()) === 1,
+  );
+  ok('with a different item icon on each', icons.length === 2 && icons.every(Boolean) && icons[0] !== icons[1], icons.join(' | '));
+  const reached = await page.evaluate(() => {
+    // Each of the two ends has a belt arriving at it: a belt's last point lies on the end's outer edge.
+    const hs = [...document.querySelectorAll('.react-flow__node[data-id="recipe:Recipe_Stator_C"] .react-flow__handle.port.in')];
+    const paths = [...document.querySelectorAll('.react-flow__edge')].filter((e) =>
+      e.getAttribute('data-id')?.includes('>recipe:Recipe_Stator_C>'),
+    );
+    return { ends: hs.length, belts: paths.length };
+  });
+  ok('and a belt for each item arriving', reached.belts >= 2, JSON.stringify(reached));
+  await page.locator('.floor-controls .floor-button >> nth=-1').click();
+  await wait(600);
+  await shot('a1b-machine-ends');
+
+  // ── A1c: ends, belts and pipes agree on the Auto floor (a pipe line, both ways round) and on the Manual floor ──
+  section = 'A1c';
+  await open(factory([['Desc_Plastic_C', 60]]));
+  await page.click('.deck-toggle');
+  await wait(600);
+  for (const [dir, label] of [
+    ['LR', 'left to right'],
+    ['TB', 'top to bottom'],
+  ]) {
+    await page.locator(`button[title="${dir === 'LR' ? 'Left to right' : 'Top to bottom'}"]`).click();
+    await wait(900);
+    const r = await endsAgree();
+    ok(
+      `Auto, ${label}: every end stands on its card and every belt and pipe starts and stops in an end`,
+      r.ends >= 3 && r.belts >= 3 && !r.apart.length && !r.loose.length,
+      JSON.stringify(r),
+    );
+    await shot(`a1c-auto-${dir.toLowerCase()}`);
+  }
+  await open(manual([['Desc_Plastic_C', 60]]));
+  await page.click('.deck-toggle');
   await settle();
+  await wait(800);
+  {
+    const r = await endsAgree();
+    ok('Manual: the same, with a pipe and belts', r.ends >= 3 && r.belts >= 3 && !r.apart.length && !r.loose.length, JSON.stringify(r));
+    await shot('a1c-manual');
+  }
+
+  // ── A1: a Manual factory laid out ──
+  section = 'A1';
+  await open(manual([['Desc_Motor_C', 10]]));
+  await page.click('.deck-toggle');
+  await settle();
+  await fit();
   await wait(800);
   await shot('a1-manual');
   let m = await model();
@@ -257,17 +448,9 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     'splitters and mergers',
     m.nodes.some((n) => n.k === 'logistic'),
   );
-  const manualRaw = await page.$$eval('.readout.wide input', (l) => l.map((i) => i.value));
-  ok('same raw input as Auto', JSON.stringify(manualRaw) === JSON.stringify(autoRaw), `${autoRaw} / ${manualRaw}`);
-  ok('same machine count', (await page.locator('.readout-value').nth(1).innerText()) === autoMachines);
-  ok(
-    'the machine ticked built in Auto is ticked on the Manual floor too',
-    m.nodes.some((n) => n.k === 'machine' && n.done),
-  );
   const states = await page.$$eval('.react-flow__node .machine-node .run-state', (l) => l.map((x) => x.textContent));
   ok('every machine at full speed', states.length > 0 && states.every((s) => s === 'Full speed'), [...new Set(states)].join(', '));
   ok('no cards on top of each other', (await overlaps()).length === 0, (await overlaps()).join(' '));
-  ok('opens with the whole floor in view', await allInView());
   ok('the toolbar clear of the totals tab', (await onTab()).length === 0, (await onTab()).join(', '));
   // The cards feeding a machine stand in the order of its inputs, so their belts don't cross: iron ore above coal.
   const steel = m.nodes.find((n) => n.recipe === 'Recipe_IngotSteel_C');
@@ -403,6 +586,17 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   await fit();
   await card(cons.id).locator('.machine-strip').click();
   await wait();
+  // A small floor: the panel grows up over the one above it, to just under the top bar.
+  const reach = await page.evaluate(() => {
+    const f = document.querySelector('.floor-view').getBoundingClientRect();
+    const p = document.querySelector('aside.inspector').getBoundingClientRect();
+    return { floor: f.height, panel: p.height, top: p.top, bar: document.querySelector('.topbar').getBoundingClientRect().bottom };
+  });
+  ok(
+    'on a small floor the machine panel is taller than the floor',
+    reach.floor >= 520 || (reach.panel > reach.floor && reach.top >= reach.bar && reach.top < reach.bar + 40),
+    JSON.stringify(reach),
+  );
   const count = page.locator('aside.inspector .stepper input');
   await count.click();
   await count.fill('8/3');
@@ -466,10 +660,10 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
 
   // ── A5: belt panel, undo ──
   section = 'A5';
-  await open(factory([['Desc_IronPlate_C', 60]]));
+  await open(manual([['Desc_IronPlate_C', 60]]));
   await page.click('.deck-toggle');
-  await page.click('.floor-kind button >> nth=1');
   await settle();
+  await fit();
   m = await model();
   const plateBelt = m.links.find((l) => {
     const a = m.nodes.find((n) => n.id === l.a);
@@ -556,13 +750,12 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
 
   // A wrong item: iron ingots into a miner can't be; iron ingots into something taking ore can't either.
   await open(
-    factory([
+    manual([
       ['Desc_IronPlate_C', 30],
       ['Desc_Wire_C', 30],
     ]),
   );
   await page.click('.deck-toggle');
-  await page.click('.floor-kind button >> nth=1');
   await settle();
   m = await model();
   const ironSmelter = m.nodes.find((n) => n.k === 'machine' && n.recipe === 'Recipe_IngotIron_C');
@@ -589,7 +782,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     (await card(ironSmelter.id).innerText()).includes('Full speed') && (await card(ironSmelter.id).locator('.port-spare').count()) === 1,
     (await card(ironSmelter.id).innerText()).replace(/\s+/g, ' '),
   );
-  ok('the totals count it as left over', /Surplus\s*45/.test(await page.locator('.floor').innerText()));
+  ok('the totals count it as left over', /Surplus\s*Iron Ingot\s*45/.test(await page.locator('.floor').innerText()));
   await shot('a7-left-over');
   await chooseOpenOutput('Machine stops');
   await settle();
@@ -609,7 +802,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   await settle();
   ok('numbers back', (await card(ironSmelter.id).locator('.run-state').count()) === 1);
 
-  // ── A8: the other views, Auto and back, rebuild ──
+  // ── A8: the other views ──
   section = 'A8';
   m = await model();
   const camBefore = await viewport();
@@ -618,40 +811,22 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     '.react-flow__node .machine-node',
     (l) => l.filter((c) => !/Input not connected|Idle/.test(c.textContent)).length,
   );
-  await page.locator('.floor-bar .segmented:not(.floor-kind) button >> nth=1').click();
+  await pickView(1);
   await wait(600);
   const rows = await page.locator('.table-view tbody tr, .table tbody tr, table tbody tr').count();
   ok('the list shows the manual machines', rows >= running && running > 0, `${rows} rows, ${running} running`);
-  await page.locator('.floor-bar .segmented:not(.floor-kind) button >> nth=2').click();
+  await pickView(2);
   await wait(600);
   ok('transport view opens', (await page.locator('.floor-view').innerText()).length > 0);
-  await page.locator('.floor-bar .segmented:not(.floor-kind) button >> nth=0').click();
+  await pickView(0);
   await wait(600);
   ok('back on the floor, the camera where it was', (await viewport()) === camBefore);
-  await page.click('.floor-kind button >> nth=0');
-  await settle();
-  await page.click('.floor-kind button >> nth=1');
-  await settle();
-  ok('Auto and back keeps the floor', JSON.stringify(await model()) === JSON.stringify(m));
-  page.once('dialog', (d) => d.accept());
-  await page.locator('.tool-button[aria-label="Rebuild"]').click();
-  await settle();
-  const rebuilt = await model();
-  ok('rebuild asks, then starts again', rebuilt.links.some((l) => l.a === ironSmelter.id) || rebuilt.nodes.length > 0);
-  ok('rebuilt: no open output left', !rebuilt.stall && (await page.locator('.open-ends').count()) === 0);
-  const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('ficsit-planner')).state.plans[0]);
-  const outs = rebuilt.nodes.filter((n) => n.k === 'out' && n.tag !== 'spare').map((n) => n.item);
-  ok(
-    'the products in the panel are the floor’s outputs, and the factory’s targets',
-    (await page.locator('.side .floor-io').count()) >= outs.length &&
-      plan.targets.every((x) => outs.includes(x.item)) &&
-      outs.every((i) => plan.targets.some((x) => x.item === i)),
-    `${outs.join(',')} / ${plan.targets.map((x) => x.item).join(',')}`,
-  );
 
   // ── A9: share ──
   section = 'A9';
-  await page.locator('.topbar .share-button').click();
+  await page.locator('.tab-menu-button').click();
+  await wait(300);
+  await page.locator('.tab-menu-list .copy-factory').click();
   await wait(500);
   const link = await page.evaluate(() => navigator.clipboard.readText().catch(() => ''));
   ok('share link made', link.includes('#share='), link.slice(0, 60));
@@ -667,7 +842,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
       const s = JSON.parse(localStorage.getItem('ficsit-planner') ?? '{}').state;
       return s?.plans?.find((p) => p.model)?.model?.nodes.length ?? 0;
     });
-    ok('the shared link brings the manual floor', shared === rebuilt.nodes.length, `${shared} of ${rebuilt.nodes.length}`);
+    ok('the shared link brings the manual floor', shared === m.nodes.length, `${shared} of ${m.nodes.length}`);
     // A link on the clipboard pasted into the page opens as a new factory, whatever is open.
     await p2.goto(URL);
     await p2.waitForFunction(() => !document.querySelector('.boot'), null, { timeout: 30000 });
@@ -681,13 +856,30 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     await p2.close();
   }
 
+  // ── A9b: Copy factory in the tab menu ──
+  section = 'A9b';
+  {
+    await open(factory([['Desc_Motor_C', 10]]));
+    await page.locator('.tab-menu-button').click();
+    await wait(300);
+    const row = page.locator('.tab-menu-list .copy-factory');
+    ok('the tab menu has a Copy factory row', (await row.count()) === 1 && (await row.innerText()).includes('Copy factory'));
+    await row.click();
+    await wait(300);
+    ok('it says the link is copied', (await row.innerText()).includes('Link copied'));
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    ok('the clipboard holds a link to the factory', clip.includes('#share='), clip.slice(0, 60));
+    await wait(1200);
+    ok('and the menu goes away', (await page.locator('.tab-menu-list').count()) === 0);
+  }
+
   // ── A10: the same output another way ──
   section = 'A10';
-  await open(factory([['Desc_Motor_C', 10]]));
-  await page.click('.floor-kind button >> nth=1');
+  await open(manual([['Desc_Motor_C', 10]]));
   await settle();
+  await fit();
   m = await model();
-  // Converted machines size themselves, at the clock the Auto card runs them at.
+  // Machines size themselves, at the clock the Auto card runs them at.
   let slow;
   for (const n of m.nodes)
     if (
@@ -739,6 +931,410 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     (await page.$eval('aside.inspector', (a) => getComputedStyle(a).animationDuration)) === '0.001s',
   );
   await page.keyboard.press('Escape');
+
+  // ── A11: areas, drawn with the right button held down ──
+  section = 'A11';
+  {
+    await open(manual([['Desc_Motor_C', 10]], { state: { settings: { ...still, areaLabels: 'always' } } }));
+    await settle();
+    await fit();
+    const groups = async () => (await model()).nodes.filter((n) => n.k === 'group');
+    const cardsOn = async () => (await model()).nodes.filter((n) => n.k !== 'group').length;
+    // Round two cards when the corner above them is empty floor, else on a spot of empty floor.
+    // The first machine and the one nearest it: the layout may put any two first.
+    const all = (await model()).nodes.filter((n) => n.k === 'machine');
+    const near = all.slice(1).sort((p, q) => Math.hypot(p.x - all[0].x, p.y - all[0].y) - Math.hypot(q.x - all[0].x, q.y - all[0].y))[0];
+    const two = [all[0], near];
+    const rects = await Promise.all(two.map((n) => card(n.id).boundingBox()));
+    const floorBox = await page.locator('.react-flow').boundingBox();
+    // A spot of empty floor above and left of both, found by stepping out from them.
+    const tl = await page.evaluate(
+      ({ x0, y0, box }) => {
+        const bar = document.querySelector('.model-toolbar')?.getBoundingClientRect().bottom ?? box.y + 120;
+        for (let d = 0; d <= 240; d += 12)
+          for (const [x, y] of [
+            [x0 - 24 - d, y0 - 30 - d],
+            [x0 - 24, y0 - 30 - d],
+            [x0 - 24 - d, y0 - 30],
+          ])
+            if (x > box.x + 20 && y > bar + 8 && document.elementFromPoint(x, y)?.classList.contains('react-flow__pane')) return { x, y };
+        return null;
+      },
+      { x0: Math.min(...rects.map((r) => r.x)), y0: Math.min(...rects.map((r) => r.y)), box: floorBox },
+    );
+    const cornerFree = !!tl;
+    const from = cornerFree ? tl : await emptySpot('right');
+    const to = cornerFree
+      ? { x: Math.max(...rects.map((r) => r.x + r.width)) + 24, y: Math.max(...rects.map((r) => r.y + r.height)) + 24 }
+      : { x: Math.max(floorBox.x + 40, from.x - 300), y: Math.min(floorBox.y + floorBox.height - 120, from.y + 150) };
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 4 });
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    ok('while the right button is held a box shows', (await page.locator('.area-draw').count()) === 1);
+    await page.mouse.up({ button: 'right' });
+    await wait(500);
+    let gs = await groups();
+    ok('letting go leaves an area', gs.length === 1 && gs[0].w >= 80 && gs[0].h >= 80, JSON.stringify(gs[0]));
+    ok(
+      'with its panel open and no build menu',
+      (await page.locator('aside.inspector #area-name').count()) === 1 && (await page.locator('.chooser').count()) === 0,
+    );
+    // With no name, icon or note yet it is still there to pick: let go of it, then click it again.
+    ok(
+      'a new area is on half squares',
+      gs.every((g) => g.x % 20 === 0 && g.y % 20 === 0 && g.w % 20 === 0 && g.h % 20 === 0),
+      JSON.stringify(gs[0]),
+    );
+    await page.keyboard.press('Escape');
+    await wait(300);
+    ok('Escape lets go of it', (await page.locator('aside.inspector').count()) === 0);
+    // A spot on the strip no card lies over.
+    const strip = () =>
+      page.evaluate(() => {
+        const r = document.querySelector('.area-grip').getBoundingClientRect();
+        for (let x = r.right - 6; x > r.left; x -= 6)
+          if (document.elementFromPoint(x, r.top + r.height / 2)?.closest('.area-grip')) return { x, y: r.top + r.height / 2 };
+        return null;
+      });
+    const bare = await strip();
+    await page.mouse.click(bare.x, bare.y);
+    await wait(500);
+    ok('an area with no name comes back when clicked on its strip', (await page.locator('aside.inspector #area-name').count()) === 1);
+    await page.keyboard.press('Escape');
+    await wait(300);
+    const edge = await page.locator('.area-node').boundingBox();
+    // A spot on the left edge no card or belt lies over.
+    const onEdge = await page.evaluate(
+      ({ x, y, h }) => {
+        for (let k = 1; k < 20; k++) {
+          const py = y + (h * k) / 20;
+          if (document.elementFromPoint(x + 2, py)?.closest('.area-edge')) return py;
+        }
+        return y + h / 2;
+      },
+      { x: edge.x, y: edge.y, h: edge.height },
+    );
+    await page.mouse.click(edge.x + 2, onEdge);
+    await wait(500);
+    ok('and on its edge', (await page.locator('aside.inspector #area-name').count()) === 1);
+    const tall = await page.locator('aside.inspector').evaluate((a) => a.scrollHeight);
+    await page.locator('.area-icon-row .add-button').click();
+    await wait(300);
+    ok(
+      'the icon list opens over the panel without making it longer',
+      (await page.locator('aside.inspector').evaluate((a) => a.scrollHeight)) <= tall + 2 &&
+        (await page.locator('.area-icon-row .picker').count()) === 1,
+    );
+    await page.keyboard.press('Escape');
+    await wait(300);
+    await page.fill('#area-name', 'Steel');
+    await page.fill('#area-note', 'Pipe for the stator');
+    await wait(500);
+    gs = await groups();
+    ok('named, with a note', gs[0].label === 'Steel' && gs[0].note === 'Pipe for the stator');
+    ok('the name is on the floor, readable at any zoom', (await page.locator('.area-name').innerText()) === 'Steel');
+    await page.locator('.color-wheel').scrollIntoViewIfNeeded();
+    const wheel = await page.locator('.color-wheel').boundingBox();
+    await page.mouse.move(wheel.x + wheel.width * 0.5, wheel.y + wheel.height * 0.2);
+    await page.mouse.down();
+    await page.mouse.move(wheel.x + wheel.width * 0.85, wheel.y + wheel.height * 0.5, { steps: 8 });
+    const live = await page.locator('.area-node').evaluate((e) => e.style.getPropertyValue('--area'));
+    ok(
+      'dragging on the wheel shows the colour on the floor at once, without touching the model',
+      /^#[0-9a-f]{6}$/.test(live) && !(await groups())[0].color,
+      live,
+    );
+    await page.mouse.up();
+    await wait(500);
+    ok('a colour from the wheel', /^#[0-9a-f]{6}$/.test((await groups())[0].color ?? ''), (await groups())[0].color);
+    await shot('a11-area');
+    // A colour typed as hex: six digits are taken as they are typed, the short form when the field is left.
+    const hex = page.locator('.color-hex');
+    await hex.scrollIntoViewIfNeeded();
+    await shot('a11-hex');
+    ok('the hex field shows the wheel’s colour', (await hex.inputValue()) === (await groups())[0].color);
+    await hex.fill('#ABC123');
+    await wait(500);
+    ok('six hex digits typed set the colour', (await groups())[0].color === '#abc123', (await groups())[0].color);
+    ok(
+      'and the area on the floor wears it',
+      (await page.locator('.area-node').evaluate((e) => e.style.getPropertyValue('--area'))) === '#abc123',
+    );
+    await hex.fill('#0f0');
+    ok('the short form waits for the field to be left', (await groups())[0].color === '#abc123');
+    await hex.blur();
+    await wait(500);
+    ok('then it is taken', (await groups())[0].color === '#00ff00', (await groups())[0].color);
+    await hex.fill('#zz');
+    await hex.blur();
+    await wait(300);
+    ok('what is not a colour is dropped', (await hex.inputValue()) === '#00ff00' && (await groups())[0].color === '#00ff00');
+    await page.keyboard.press('Escape');
+    await wait(300);
+    await addHere();
+    ok('a right click without a drag is still the build menu', (await page.locator('.chooser').count()) === 1);
+    await page.keyboard.press('Escape');
+    await wait(300);
+    // The strip moves the area and what lies wholly inside it.
+    const before = await model();
+    const inside = await page.evaluate(() => {
+      const a = document.querySelector('.area-node').getBoundingClientRect();
+      return [...document.querySelectorAll('.react-flow__node-part')]
+        .filter((n) => {
+          const r = n.getBoundingClientRect();
+          return r.left >= a.left && r.top >= a.top && r.right <= a.right && r.bottom <= a.bottom;
+        })
+        .map((n) => n.dataset.id);
+    });
+    const grip = await strip();
+    await drag({ x: grip.x, y: grip.y }, { x: grip.x + 80, y: grip.y + 40 });
+    await wait(500);
+    const after = await model();
+    const moved = (id) => {
+      const [a, b] = [before.nodes.find((n) => n.id === id), after.nodes.find((n) => n.id === id)];
+      return [b.x - a.x, b.y - a.y];
+    };
+    const [dx, dy] = moved(gs[0].id);
+    ok('the area moved', dx > 0 && dy > 0, `${dx},${dy}`);
+    ok(
+      'what lay inside went with it, the rest stayed',
+      before.nodes.every((n) => {
+        const [x, y] = moved(n.id);
+        return inside.includes(n.id) || n.id === gs[0].id ? x === dx && y === dy : x === 0 && y === 0;
+      }),
+      `${inside.length} inside`,
+    );
+    ok('the area had cards in it to take along', inside.length > 0, `${inside.length}`);
+    await page.keyboard.press('Control+z');
+    await wait(500);
+    ok(
+      'one undo puts them all back',
+      JSON.stringify((await model()).nodes.map((n) => [n.id, n.x, n.y])) === JSON.stringify(before.nodes.map((n) => [n.id, n.x, n.y])),
+    );
+    // A box round cards inside it never picks the area.
+    await page.mouse.click(grip.x, grip.y);
+    await wait(500);
+    const count = (await model()).nodes.length;
+    await page.keyboard.press('Control+d');
+    await wait(500);
+    m = await model();
+    ok(
+      'duplicating the area copies what lies in it',
+      m.nodes.filter((n) => n.k === 'group').length === 2 && m.nodes.length === count + inside.length + 1,
+      `${count} → ${m.nodes.length}`,
+    );
+    await page.keyboard.press('Control+z');
+    await wait(500);
+    await page.mouse.click(grip.x, grip.y);
+    await wait(500);
+    await page.keyboard.press('Delete');
+    await wait(500);
+    ok('Delete takes the area and leaves the cards', (await groups()).length === 0 && (await cardsOn()) === count - 1);
+    await page.keyboard.press('Control+z');
+    await wait(500);
+    ok('and undo brings it back', (await groups()).length === 1);
+    const res = await page.locator('.area-node .react-flow__resize-control.handle.bottom.right').count();
+    ok('picked, its corners show handles', res === 0 || res === 1);
+  }
+
+  // ── A11b: areas on the Auto floor ──
+  section = 'A11b';
+  {
+    await open(factory([['Desc_Motor_C', 10]]));
+    const areasSaved = async () => {
+      await wait(400);
+      return page.evaluate(() => JSON.parse(localStorage.getItem('ficsit-planner')).state.plans[0].areas?.nodes ?? []);
+    };
+    const floorBox = await page.locator('.react-flow').boundingBox();
+    const from = await emptySpot('right');
+    const to = { x: Math.max(floorBox.x + 40, from.x - 260), y: Math.min(floorBox.y + floorBox.height - 120, from.y + 140) };
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 4 });
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    ok('Auto: while the right button is held a box shows', (await page.locator('.area-draw').count()) === 1);
+    await page.mouse.up({ button: 'right' });
+    await wait(500);
+    let gs = await areasSaved();
+    ok('Auto: letting go leaves an area', gs.length === 1 && gs[0].k === 'group' && gs[0].w >= 80, JSON.stringify(gs[0]));
+    ok('Auto: its panel opens with the name box', (await page.locator('aside.inspector #area-name').count()) === 1);
+    await page.fill('#area-name', 'Motors');
+    await wait(500);
+    gs = await areasSaved();
+    ok('Auto: the name is saved', gs[0].label === 'Motors');
+    ok(
+      'Auto: and shows on the floor',
+      (await page.locator('.react-flow__node-area:not(.auto-area) .area-name').first().innerText()) === 'Motors',
+    );
+    // The panel covers the strip while it is open: click bare floor to put it away.
+    const bare = await emptySpot('left');
+    await page.mouse.click(bare.x, bare.y);
+    await wait(400);
+    // A card may lie over part of the strip: take a point of it that is bare.
+    const hold = await page.evaluate(() => {
+      const r = document.querySelector('.react-flow__node-area:not(.auto-area) .area-grip').getBoundingClientRect();
+      for (let x = r.left + 6; x < r.right - 6; x += 8)
+        if (document.elementFromPoint(x, r.top + r.height / 2)?.closest('.area-grip')) return { x, y: r.top + r.height / 2 };
+      return null;
+    });
+    ok('Auto: a bare point of its strip is there to take hold of', !!hold);
+    await page.mouse.move(hold.x, hold.y);
+    await page.mouse.down();
+    await page.mouse.move(hold.x + 60, hold.y + 60, { steps: 6 });
+    await page.mouse.up();
+    await wait(500);
+    const moved = (await areasSaved())[0];
+    ok('Auto: dragging its strip moves it', moved.x !== gs[0].x || moved.y !== gs[0].y, `${gs[0].x},${gs[0].y} -> ${moved.x},${moved.y}`);
+    ok('Auto: the cards stay where they were laid out', (await page.locator('.react-flow__node-machine').count()) > 0);
+    await page.reload();
+    await wait(1500);
+    ok(
+      'Auto: after a reload the area is still there',
+      (await page.locator('.react-flow__node-area:not(.auto-area) .area-node').count()) === 1,
+    );
+    // A belt's label may lie over the middle of the strip: click a point of it that is bare.
+    const spot = await page.evaluate(() => {
+      const r = document.querySelector('.react-flow__node-area:not(.auto-area) .area-grip').getBoundingClientRect();
+      for (let x = r.left + 6; x < r.right - 6; x += 8)
+        if (document.elementFromPoint(x, r.top + r.height / 2)?.closest('.area-grip')) return { x, y: r.top + r.height / 2 };
+      return null;
+    });
+    await page.mouse.click(spot.x, spot.y);
+    await wait(400);
+    await page.locator('.inspector-actions .danger').click();
+    await wait(500);
+    ok(
+      'Auto: Remove area takes it off',
+      (await areasSaved()).length === 0 && (await page.locator('.react-flow__node-area:not(.auto-area) .area-node').count()) === 0,
+    );
+  }
+
+  // ── A11c: an output card offers its product to the pool ──
+  section = 'A11c';
+  {
+    await open(manual([['Desc_Motor_C', 10]]));
+    await settle();
+    await fit();
+    await wait(600);
+    const pooledNow = async () => {
+      await wait(400);
+      return page.evaluate(() => JSON.parse(localStorage.getItem('ficsit-planner')).state.plans[0].pooled ?? []);
+    };
+    const button = page.locator('.endpoint-node.manual.goal .endpoint-pool');
+    ok(
+      'Manual: an output card has a To the pool button',
+      (await button.count()) === 1 && (await button.innerText()).includes('To the pool'),
+    );
+    ok('Manual: it starts not in the pool', (await pooledNow()).length === 0);
+    await button.click();
+    ok('Manual: a click offers the product to the pool', (await pooledNow()).includes('Desc_Motor_C'));
+    ok('Manual: and the button says so', (await button.getAttribute('aria-pressed')) === 'true');
+    await button.click();
+    ok('Manual: a second click takes it back', (await pooledNow()).length === 0);
+    await open(factory([['Desc_Motor_C', 10]]));
+    await wait(600);
+    ok('Auto: the output card has its button too', (await page.locator('.endpoint-pool').count()) >= 1);
+  }
+
+  // ── A11d: the All page lists the standard recipes too ──
+  section = 'A11d';
+  {
+    await open(
+      saved({
+        mode: 'factory',
+        plans: [
+          { id: 'f1', name: 'Motors', targets: [{ item: 'Desc_Motor_C', rate: 10 }] },
+          { id: 'f2', name: 'Plastic', targets: [{ item: 'Desc_Plastic_C', rate: 60 }] },
+        ],
+        active: 'f1',
+        unlocked: ['Recipe_Alternate_AdheredIronPlate_C'],
+      }),
+    );
+    await page.click('.plan-current');
+    await page.locator('.plan-row.all .plan-row-name').click();
+    await page.getByRole('radio', { name: 'Unlocked recipes' }).click();
+    await wait(600);
+    const alt = await page.locator('.recipe-row input:checked').count();
+    ok('All: the alternate you unlocked is ticked', alt === 1, `${alt}`);
+    await page.getByRole('radio', { name: /^standard$/i }).click();
+    await wait(400);
+    const rows = await page.locator('.recipe-row').count();
+    const fixed = await page.locator('.recipe-row input:checked:disabled').count();
+    ok('All: Standard lists the standard recipes', rows > 20, `${rows}`);
+    const on = await page.locator('.recipe-row input:checked').count();
+    ok('All: each starts on, and can be changed', on === rows && fixed === 0, `${on}/${rows}, ${fixed} locked`);
+    await page.locator('.recipe-row .recipe-name').first().click({ force: true });
+    await wait(300);
+    ok('All: clicking one turns it off', (await page.locator('.recipe-row input:checked').count()) === rows - 1);
+    await page.locator('.recipe-row .recipe-name').first().click({ force: true });
+    await wait(300);
+    ok('All: clicking it again turns it back on', (await page.locator('.recipe-row input:checked').count()) === rows);
+  }
+
+  // ── A12: automatic copies in Settings › Your data ──
+  section = 'A12';
+  {
+    await open(factory([['Desc_Motor_C', 10]]));
+    await page.click('.chrome-button.settings');
+    await page.locator('.settings-nav button:has-text("Your data")').click();
+    ok('no copies yet, no Auto backups row', (await page.locator('text=Auto backups').count()) === 0);
+    await page.keyboard.press('Escape');
+    await wait(300);
+    // Put a copy where the app keeps them, the way a day-old one would sit there.
+    await page.evaluate(async () => {
+      const state = JSON.parse(localStorage.getItem('ficsit-planner')).state;
+      const file = {
+        kind: 'ficsit-planner',
+        version: 2,
+        exported: new Date().toISOString(),
+        plans: state.plans,
+        power: state.power ?? [],
+        settings: state.settings,
+      };
+      const db = await new Promise((res, rej) => {
+        const r = indexedDB.open('ficsit-planner-backups', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('copies', { keyPath: 'at' });
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+      const tx = db.transaction('copies', 'readwrite');
+      tx.objectStore('copies').put({ at: Date.now() - 86400000, hash: 'x', factories: file.plans.length, plants: 0, file });
+      await new Promise((res) => (tx.oncomplete = res));
+      db.close();
+    });
+    await page.click('.chrome-button.settings');
+    await page.locator('.settings-nav button:has-text("Your data")').click();
+    await wait(500);
+    ok('the copy is listed', (await page.locator('text=Auto backups').count()) >= 1);
+    const tabs = async () => {
+      await wait(600);
+      return page.evaluate(() => JSON.parse(localStorage.getItem('ficsit-planner')).state.plans.length);
+    };
+    const before = await tabs();
+    await page.locator('button:has-text("Restore")').click();
+    await wait(400);
+    ok('Restore says what it added', (await page.locator('.setting-note.ok').count()) === 1);
+    await page.keyboard.press('Escape');
+    await wait(300);
+    ok('and adds the factory as a new tab', (await tabs()) === before + 1, `${before} → ${await tabs()}`);
+    await page.click('.chrome-button.settings');
+    await page.locator('.settings-nav button:has-text("Your data")').click();
+    const wipe = page.locator('button:has-text("Delete")').last();
+    await wipe.click();
+    await wipe.click();
+    await page.waitForLoadState('load');
+    await wait(1500);
+    const left = await page.evaluate(async () => ({
+      keys: Object.keys(localStorage).filter((k) => k.startsWith('ficsit-')),
+      dbs: (await indexedDB.databases()).map((d) => d.name),
+    }));
+    ok(
+      'Delete everything leaves no copies or keys',
+      !left.dbs.includes('ficsit-planner-backups') && left.keys.every((k) => k === 'ficsit-planner'),
+      JSON.stringify(left),
+    );
+  }
 
   // ── B: building by hand ──
   section = 'B1';
@@ -1011,11 +1607,11 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
 
   // A machine that takes back what it gives off (a Blender feeding itself acid) comes across with its belt round to its own input.
   section = 'loop';
-  await open(factory([['Desc_UraniumCell_C', 12]]));
+  await open(manual([['Desc_UraniumCell_C', 12]]));
   await page.click('.deck-toggle');
   await wait(600);
-  await page.click('.floor-kind button >> nth=1');
   await settle();
+  await fit();
   await wait(800);
   m = await model();
   const blender = m.nodes.find((n) => n.recipe === 'Recipe_UraniumCell_C');
@@ -1033,11 +1629,11 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
 
   // The "All" tab: every factory and plant on one page; a hand-built factory counts for what its floor works out to.
   section = 'all';
-  await open(factory([['Desc_Motor_C', 10]]));
+  await open(manual([['Desc_Motor_C', 10]]));
   await page.click('.deck-toggle');
   await wait(600);
-  await page.click('.floor-kind button >> nth=1');
   await settle();
+  await fit();
   await wait(800);
   const floorPower = (await page.locator('.readout.power .readout-value').first().innerText()).replace(/\s+/g, ' ');
   await page.click('.plan-current');
@@ -1046,7 +1642,19 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   ok('a power plant with nothing in it is not in the factory menu', (await page.locator('.plan-row.power').count()) === 0);
   await page.keyboard.press('Escape');
   await page.click('.plan-add');
+  await wait(300);
+  ok('the + offers an Auto and a Manual factory', (await page.locator('.card-menu button').count()) === 2);
+  await page.keyboard.press('Escape');
+  await wait(200);
+  ok(
+    'Escape closes it and adds nothing',
+    (await page.locator('.card-menu').count()) === 0 && (await page.locator('.plan-current').innerText()).includes('Factory 1'),
+  );
+  await page.click('.plan-add');
+  await wait(300);
+  await page.locator('.card-menu button', { hasText: 'Auto factory' }).click();
   await wait(500);
+  ok('Auto factory adds an Auto tab', (await page.locator('.plan-current .kind-tag.auto').count()) === 1);
   await page.click('.plan-current');
   await wait(300);
   ok('the All row shows with two factories', (await page.locator('.plan-row.all').count()) === 1);
@@ -1058,14 +1666,117 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   );
   const rowsText = await page.$$eval('.ov-table:not(.plants):not(.pool) tbody tr', (l) => l.map((r) => r.textContent.replace(/\s+/g, ' ')));
   ok('a row per factory, the empty one says so', rowsText.length === 2 && /Nothing planned/.test(rowsText[1]), rowsText.join(' | '));
-  ok('the hand-built factory is marked', (await page.locator('.ov-tag').count()) === 1);
+  ok(
+    'each factory shows its kind: the Manual one a grid, the Auto one a gear',
+    (await page.locator('.ov-name .kind-tag.manual').count()) === 1 && (await page.locator('.ov-name .kind-tag.auto').count()) === 1,
+  );
   const rowPower = rowsText[0].match(/([\d.,]+)\s*MW/)?.[1];
   ok('its power is what the Manual floor showed', !!rowPower && floorPower.startsWith(rowPower), `${floorPower} / ${rowPower}`);
-  ok('the page is clean of floor controls', (await page.locator('.floor-bar, .share-button').count()) === 0);
+  ok('the page is clean of floor controls', (await page.locator('.floor-bar, .copy-factory').count()) === 0);
   await shot('all-page');
+  // The Materials window: the parts the factories need and which factory needs how much.
+  await page.getByRole('button', { name: 'Materials' }).click();
+  await wait(800);
+  const matRows = await page.$$eval('.materials .mat-row', (l) => l.map((r) => r.textContent.replace(/\s+/g, ' ')));
+  ok(
+    'the Materials panel lists parts and names the factory that needs them',
+    matRows.length > 3 && (await page.locator('.materials .ov-who').count()) >= matRows.length,
+    matRows.slice(0, 2).join(' | '),
+  );
+  await shot('materials');
+  await page.keyboard.press('Escape');
+  await wait(400);
+  ok('Escape closes the Materials panel', (await page.locator('.materials').count()) === 0);
   await page.locator('.ov-name button').first().click();
   await wait(600);
-  ok('a row opens its factory', (await page.locator('.overview').count()) === 0 && (await page.locator('.floor-kind').count()) === 1);
+  ok(
+    'a row opens its factory',
+    (await page.locator('.overview').count()) === 0 &&
+      (await page.locator('.react-flow').count()) === 1 &&
+      (await page.locator('.floor-kind').count()) === 0,
+  );
+
+  // Auto and Manual factories are apart: an old tab holding both is two tabs, and neither changes the other.
+  section = 'apart';
+  {
+    const motorModel = manualModel([['Desc_Motor_C', 10]]);
+    const savedPlans = () => page.evaluate(() => JSON.parse(localStorage.getItem('ficsit-planner')).state.plans);
+    // A session saved before version 4: one tab, the Manual floor on screen, the Auto targets beside it.
+    await open(
+      JSON.stringify({
+        state: {
+          onboarded: true,
+          tier: 9,
+          lang: 'en',
+          mode: 'factory',
+          settings: still,
+          plans: [{ id: 'f1', name: 'Motors', targets: [{ item: 'Desc_Motor_C', rate: 10 }], floor: 'manual', model: motorModel }],
+          active: 'f1',
+        },
+        version: 3,
+      }),
+    );
+    await settle();
+    await wait(500);
+    const tabs = await savedPlans();
+    ok(
+      'an old tab with both floors becomes two tabs',
+      tabs.length === 2 && tabs[0].name === 'Motors' && tabs[1].name === 'Motors (Manual)',
+    );
+    ok(
+      'the Auto one has no floor, the Manual one keeps its floor',
+      !tabs[0].model && !tabs[0].floor && tabs[1].floor === 'manual' && tabs[1].model.nodes.length === motorModel.nodes.length,
+    );
+    ok(
+      'the floor that was open is still open',
+      (await page.locator('.plan-current').innerText()).includes('Motors (Manual)') &&
+        (await page.locator('.react-flow__node-part').count()) > 0,
+    );
+    await page.click('.plan-current');
+    await wait(300);
+    ok(
+      'the list tells them apart: a gear for Auto, a grid for Manual',
+      (await page.locator('.plan-row[data-group="f"] .kind-tag.auto').count()) === 1 &&
+        (await page.locator('.plan-row[data-group="f"] .kind-tag.manual').count()) === 1,
+    );
+    await page.locator('.plan-row[data-group="f"]').first().locator('.plan-row-name').click();
+    await settle();
+    ok(
+      'the Auto tab shows no switch to Manual',
+      (await page.locator('.floor-kind').count()) === 0 && (await page.locator('.react-flow__node-machine').count()) > 0,
+    );
+    const manualBefore = JSON.stringify((await savedPlans())[1]);
+    const rate = page.locator('.side .targets .item-card input').first();
+    await rate.fill('20');
+    await rate.press('Enter');
+    await wait(900);
+    const after = await savedPlans();
+    ok('a target changed on the Auto tab', after[0].targets[0].rate === 20);
+    ok('and the Manual tab beside it is exactly as it was', JSON.stringify(after[1]) === manualBefore);
+
+    // A Manual factory from the + menu: an empty floor of its own, with a Manual tag in front of its name.
+    await page.click('.plan-add');
+    await wait(300);
+    await page.locator('.card-menu button', { hasText: 'Manual factory' }).click();
+    await wait(800);
+    const added = await savedPlans();
+    ok(
+      'Manual factory from the + adds a Manual tab with an empty floor',
+      added.length === 3 && added[2].floor === 'manual' && added[2].model.nodes.length === 0,
+    );
+    ok('its name has the grid in front', (await page.locator('.plan-current .kind-tag.manual').count()) === 1);
+    await shot('apart-new-manual');
+
+    // "Build by hand" is for a factory with nothing in it, and only there.
+    await open(blank);
+    ok('an empty Auto factory offers Build by hand', (await page.locator('.build-by-hand').count()) === 1);
+    await page.locator('.build-by-hand').click();
+    await wait(800);
+    const made = (await savedPlans())[0];
+    ok('it turns that tab Manual', made.floor === 'manual' && made.model.nodes.length === 0);
+    await open(factory([['Desc_Motor_C', 10]]));
+    ok('a factory with something in it offers no such button', (await page.locator('.build-by-hand').count()) === 0);
+  }
 
   // The pool: what factories leave over, for another factory to take; red when more is taken than there is.
   section = 'pool';
@@ -1208,7 +1919,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
       mode: 'factory',
       plans: [{ id: 'f1', name: 'Factory 1', targets: [{ item: 'Desc_Motor_C', rate: 10 }] }],
       active: 'f1',
-      settings: { autoSplitters: true },
+      settings: {},
     }),
   );
   await page.click('.deck-toggle');
@@ -1226,7 +1937,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   await wait(700);
   ok('a machine panel says how to share a belt between its machines', (await page.locator('.inspector-balancer').count()) === 1);
   await open(factory([['Desc_Motor_C', 10]]));
-  ok('off by default: no splitter cards', (await page.locator('.logistic-node').count()) === 0);
+  ok('on without any setting: splitter cards are there', (await page.locator('.logistic-node').count()) > 0);
 
   // The old address says there is a new one, and takes the plans along in a link. Both addresses are served from this build.
   section = 'moved';
@@ -1281,15 +1992,15 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     ['Desc_MotorLightweight_C', 2],
     ['Desc_SpaceElevatorPart_9_C', 2],
   ]) {
-    await open(factory([[item, rate]]));
+    await open(manual([[item, rate]]));
     await page.click('.deck-toggle');
-    await page.click('.floor-kind button >> nth=1');
     await settle();
+    await fit();
     await wait(600);
     const mm = await model();
     const tag = item.replace(/^Desc_|_C$/g, '');
     await shot(`big-${tag}-open`);
-    ok(`${tag}: converted, the whole floor in view`, await allInView());
+    ok(`${tag}: the whole floor in view`, await allInView());
     ok(
       `${tag}: opens on cards`,
       (await page.$$eval(
@@ -1622,19 +2333,12 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   // ── Q: 0.13.5 ──
   section = 'Q';
   const plate = 'Desc_IronPlateReinforced_C';
-  await open(
-    saved({
-      mode: 'factory',
-      plans: [{ id: 'f1', name: 'Factory 1', targets: [{ item: plate, rate: 30 }] }],
-      active: 'f1',
-      settings: { beltLabels: 'always' },
-    }),
-  );
-  await page.click('.floor-kind button >> nth=1');
+  await open(manual([[plate, 30]], { state: { settings: { ...still, beltLabels: 'always' } } }));
   await settle();
+  await fit();
   let m = await model();
   ok(
-    'converted belts are left to the load: no Mk picked',
+    'belts are left to the load: no Mk picked',
     m.links.every((l) => l.mk === undefined),
   );
   ok(
@@ -1668,16 +2372,19 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   ok('a miner held back shows the clock it runs at, not a share', !/Runs at/.test(minerNote), minerNote.replace(/\s+/g, ' '));
   await shot('q-five');
 
-  // Numbers off: Rebuild stays, and still starts the floor again.
+  // Numbers off takes them away; on again, they are back as they were.
   await page.locator('.tool-button[aria-label="Numbers"]').click();
   await settle();
-  ok('numbers off: Rebuild still there', await page.locator('.tool-button[aria-label="Rebuild"]').isVisible());
-  page.once('dialog', (d) => d.accept());
-  await page.locator('.tool-button[aria-label="Rebuild"]').click();
+  ok(
+    'numbers off: no Rebuild button any more, and no run states',
+    (await page.locator('.tool-button[aria-label="Rebuild"]').count()) === 0 &&
+      (await page.locator('.react-flow__node .machine-node .run-state').count()) === 0,
+  );
+  await page.locator('.tool-button[aria-label="Numbers"]').click();
   await settle();
   const again = await model();
   const out5 = again.nodes.find((n) => n.k === 'out' && n.item === plate);
-  ok('numbers off: Rebuild builds for what the floor puts out', again.calc === 'basic' && out5?.lim === 5, JSON.stringify(out5));
+  ok('numbers back: the floor puts out what it did', again.calc === 'basic' && out5?.lim === 5, JSON.stringify(out5));
 
   // A double click ticks a card built without opening its panel; one click opens it.
   await fit();
@@ -1790,56 +2497,20 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   await settle();
   ok('one undo turns it back', (await model()).dir === undefined);
 
-  // Converting a factory the Auto floor shows top to bottom keeps it that way.
-  await open(
-    saved({
-      mode: 'factory',
-      plans: [{ id: 'f1', name: 'Factory 1', targets: [{ item: 'Desc_Motor_C', rate: 10 }] }],
-      active: 'f1',
-      graphDir: 'TB',
-    }),
-  );
-  await page.click('.floor-kind button >> nth=1');
-  await settle();
-  m = await model();
-  ok('converted from a floor running down, it runs down', m.dir === 'TB' && (await overlaps()).length === 0);
-  const motorKinks = await kinked(m.links);
-  ok('and its belts have no kinks', motorKinks.length === 0, motorKinks.slice(0, 5).join(', '));
-  await shot('q-motor-down');
-
   // ── R: 0.13.7 ──
   section = 'R';
-  await open(
-    saved({
-      mode: 'factory',
-      plans: [{ id: 'f1', name: 'Factory 1', targets: [{ item: plate, rate: 30 }] }],
-      active: 'f1',
-    }),
-  );
-  await page.click('.floor-kind button >> nth=1');
+  await open(manual([[plate, 30]]));
   await settle();
+  await fit();
   const targetsNow = () => page.evaluate(() => JSON.parse(localStorage.getItem('ficsit-planner')).state.plans[0].targets);
   m = await model();
   const outCard = m.nodes.find((n) => n.k === 'out' && n.item === plate);
 
-  // One list of targets: set in Auto, the floor's output follows; set on the floor, Auto follows.
-  await page.click('.floor-kind button >> nth=0');
-  await settle();
-  await page.locator('.side .targets .item-card input').first().fill('15');
-  await page.locator('.side .targets .item-card input').first().press('Enter');
-  await wait(300);
-  await page.click('.floor-kind button >> nth=1');
-  await settle();
-  ok('a target set in Auto is the Manual output’s amount', (await model()).nodes.find((n) => n.id === outCard.id)?.lim === 15);
+  // A Manual factory's targets are its floor's output cards: an amount set on the floor is its target.
   await page.locator('.side .floor-io input').first().fill('7');
   await page.locator('.side .floor-io input').first().press('Enter');
   await settle();
-  ok('an amount set on the floor is the target in Auto', JSON.stringify(await targetsNow()) === JSON.stringify([{ item: plate, rate: 7 }]));
-  await page.click('.floor-kind button >> nth=0');
-  await settle();
-  ok('and Auto shows it', (await page.locator('.side .targets .item-card input').first().inputValue()) === '7');
-  await page.click('.floor-kind button >> nth=1');
-  await settle();
+  ok('an amount set on the floor is the target', JSON.stringify(await targetsNow()) === JSON.stringify([{ item: plate, rate: 7 }]));
   await fit();
 
   // An output has no panel; its × takes it off, and the target with it. Undo brings both back.
@@ -1931,6 +2602,17 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     menuItems.map((x) => x.replace(/\s+/g, ' ')).join(' | '),
   );
   await shot('r-menu');
+  ok('the menu’s first entry has the keyboard focus', await page.evaluate(() => !!document.activeElement?.closest('.card-menu')));
+  await page.keyboard.press('Escape');
+  await wait(150);
+  ok('Escape closes the card menu', !(await page.locator('.card-menu').count()));
+  await card(asm.id).locator('.machine-body').click({ button: 'right' });
+  await wait(300);
+  await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+  await wait(150);
+  ok('a press anywhere else closes the card menu', !(await page.locator('.card-menu').count()));
+  await card(asm.id).locator('.machine-body').click({ button: 'right' });
+  await wait(300);
   await page.locator('.card-menu button', { hasText: 'Mark built' }).click();
   await settle();
   ok('Mark built from the menu', (await model()).nodes.find((n) => n.id === asm.id)?.done === true);
@@ -1982,11 +2664,10 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   await wait(600);
   const ctrls = await page.locator('.floor-controls').boundingBox();
   const fbar = await page.locator('.floor-bar').boundingBox();
-  const kindsBox = await page.locator('.floor-kind').boundingBox();
-  const viewsBox = await page.locator('.floor-bar .segmented:not(.floor-kind)').boundingBox();
+  const viewsBox = await page.locator('.floor-bar .segmented').boundingBox();
   ok(
     'a panel open: the bottom buttons clear of each other',
-    !clash(ctrls, kindsBox) && !clash(ctrls, viewsBox) && !clash(ctrls, await page.locator('aside.inspector').boundingBox()),
+    !clash(ctrls, viewsBox) && !clash(ctrls, await page.locator('aside.inspector').boundingBox()),
     JSON.stringify({ ctrls, fbar }),
   );
   await shot('r-panel-bottom');
@@ -1994,15 +2675,9 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
 
   // ── S: 0.13.8 ──
   section = 'S';
-  await open(
-    saved({
-      mode: 'factory',
-      plans: [{ id: 'f1', name: 'Factory 1', targets: [{ item: 'Desc_Motor_C', rate: 10 }] }],
-      active: 'f1',
-    }),
-  );
-  await page.click('.floor-kind button >> nth=1');
+  await open(manual([['Desc_Motor_C', 10]]));
   await settle();
+  await fit();
   // Turned one way and straight back before the first is laid out: the second click waits its turn and does nothing.
   await page.locator('.floor-dir button[aria-checked="false"]').click();
   await page.locator('.floor-dir button[aria-checked="true"]').click({ force: true });
@@ -2021,6 +2696,223 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     midway && !(await model()).nodes.some((n) => n.id === motorOut.id),
     `laying out when taken off: ${midway}`,
   );
+
+  // ── U: belts routed by hand ──
+  section = 'U';
+  await open(manual([['Desc_Motor_C', 10]]));
+  await settle();
+  await fit();
+  m = await model();
+  const routed = m.links.find((l) => m.nodes.find((n) => n.id === l.a)?.k === 'machine');
+  // Clicked where the belt really runs: with stops of its own its middle may be bare floor.
+  const onBelt = () =>
+    page.evaluate((id) => {
+      const p = document.querySelector(`.react-flow__edge[data-id="${id}"] .belt-hit`);
+      const pt = p.getPointAtLength(p.getTotalLength() / 2);
+      const m = p.getScreenCTM();
+      return { x: m.a * pt.x + m.c * pt.y + m.e, y: m.b * pt.x + m.d * pt.y + m.f };
+    }, routed.id);
+  const pickRoute = async () => {
+    const at = await onBelt();
+    await page.mouse.click(at.x, at.y);
+  };
+  const mine = async () => (await model()).links.find((l) => l.id === routed.id);
+  const dragBy = async (b, dx, dy) => {
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height / 2 + dy, { steps: 6 });
+    await page.mouse.up();
+    await settle();
+  };
+  // A way to go from a spot to bare floor, away from every card and bar over it.
+  const bare = (b) =>
+    page.evaluate(
+      ([x, y]) => {
+        const free = (px, py) => document.elementFromPoint(px, py)?.classList.contains('react-flow__pane');
+        for (const r of [30, 50, 70, 90, 120]) {
+          for (let a = 0; a < 360; a += 30) {
+            const dx = Math.round(r * Math.cos((a * Math.PI) / 180));
+            const dy = Math.round(r * Math.sin((a * Math.PI) / 180));
+            if (free(x + dx, y + dy)) return [dx, dy];
+          }
+        }
+        return [0, 0];
+      },
+      [b.x + b.width / 2, b.y + b.height / 2],
+    );
+  const dragFree = async (b) => dragBy(b, ...(await bare(b)));
+  await pickRoute();
+  await wait();
+  ok('a belt left alone has no stops to drag', (await page.locator('.stops .stop').count()) === 0 && !(await mine()).own);
+  await page.locator('aside.inspector .segmented button:text-is("My own")').click();
+  await settle();
+  ok('My own marks the belt as routed by hand', (await mine()).own === true);
+  ok(
+    'every + sits on the belt',
+    await page.evaluate(() => {
+      const edge = document.querySelector('.react-flow__edge.selected');
+      const hit = edge?.querySelector('path.belt-hit');
+      const adds = [...(edge?.querySelectorAll('.stops .stop-add') ?? [])];
+      return !!hit && adds.length > 0 && adds.every((c) => hit.isPointInStroke(new DOMPoint(c.cx.baseVal.value, c.cy.baseVal.value)));
+    }),
+  );
+  const routeBefore = (await mine()).pts ?? [];
+  await dragFree(await page.locator('.stops .stop-add').first().boundingBox());
+  const routeAdded = (await mine()).pts ?? [];
+  ok('dragging the + adds a stop where it is let go', routeAdded.length === routeBefore.length + 1, JSON.stringify(routeAdded));
+  await dragFree(await page.locator('.stops .stop').first().boundingBox());
+  const routeMoved = (await mine()).pts ?? [];
+  ok(
+    'dragging a stop moves it, on the half squares',
+    JSON.stringify(routeMoved) !== JSON.stringify(routeAdded) && routeMoved.flat().every((v) => v % 20 === 0),
+    JSON.stringify(routeMoved),
+  );
+  await shot('u-own-route');
+  // They stay when a card moves.
+  await page.keyboard.press('Escape');
+  await dragBy(await card(routed.a).boundingBox(), 0, 30);
+  ok('moving a card keeps them', JSON.stringify((await mine()).pts) === JSON.stringify(routeMoved));
+  // A double click on a stop takes it off.
+  await pickRoute();
+  await wait();
+  const stopDot = await page.locator('.stops .stop').first().boundingBox();
+  await page.mouse.dblclick(stopDot.x + stopDot.width / 2, stopDot.y + stopDot.height / 2);
+  await settle();
+  ok('double click on a stop takes it off', ((await mine()).pts ?? []).length === routeMoved.length - 1);
+  // Back to Automatic: the stops go.
+  await pickRoute();
+  await wait();
+  await page.locator('aside.inspector .segmented button:text-is("Automatic")').click();
+  await settle();
+  const routeBack = await mine();
+  ok('Automatic takes the stops away', !routeBack.own && routeBack.pts === undefined);
+  ok('and the belt shows no dots', (await page.locator('.stops').count()) === 0);
+  // The middle button on a belt left to Automatic is My own, as from the panel, with no stop put where it was pressed.
+  await page.keyboard.press('Escape');
+  const press = await onBelt();
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.up({ button: 'middle' });
+  await settle();
+  const pulled = await mine();
+  ok('the middle button on a belt makes it My own', pulled.own === true && (pulled.pts ?? []).length === 0, JSON.stringify(pulled.pts));
+  ok('and opens the belt', (await page.locator('aside.inspector .segmented button[aria-checked="true"]:text-is("My own")').count()) === 1);
+  await page.locator('aside.inspector .segmented button:text-is("Automatic")').click();
+  await settle();
+  // Tidy up lays it all out afresh: a belt routed by hand goes back to Automatic.
+  await pickRoute();
+  await wait();
+  await page.locator('aside.inspector .segmented button:text-is("My own")').click();
+  await settle();
+  await dragFree(await page.locator('.stops .stop-add').first().boundingBox());
+  ok('a belt routed by hand again', (await mine()).own === true && ((await mine()).pts ?? []).length > 0);
+  await page.keyboard.press('Escape');
+  await page.locator('.tool-button[aria-label="Tidy up"]').click();
+  await settle();
+  ok('Tidy up gives it back to Automatic', !(await mine()).own);
+
+  // ── V: the calculator ──
+  section = 'V';
+  await page.keyboard.press('Escape');
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('c');
+  await wait(300);
+  const calc = page.locator('.calc');
+  ok('C opens the calculator', await calc.isVisible());
+  ok('with the cursor in its field', await page.evaluate(() => document.activeElement?.classList.contains('calc-field')));
+  await page.keyboard.type('2+3*4');
+  ok('nothing is shown under the field before = is pressed', (await page.locator('.calc-live').count()) === 0);
+  await page.keyboard.press('NumpadEnter');
+  ok(
+    'Enter on the number pad works it out and keeps it',
+    (await page.locator('.calc-handle').count()) === 1 && (await page.locator('.calc-field').inputValue()) === '14',
+  );
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type('7*6');
+  await page.keyboard.press('NumpadEnter');
+  ok('typing 7*6 and Enter on the number pad works', (await page.locator('.calc-field').inputValue()) === '42');
+  await page.locator('.calc-keys button:text-is("×")').click();
+  await page.locator('.calc-keys button:text-is("2")').click();
+  await page.locator('.calc-keys .equals').click();
+  ok('the keys work too', (await page.locator('.calc-field').inputValue()) === '84');
+  ok('the history is out of the way until its tab is pressed', (await page.locator('.calc-history').count()) === 0);
+  await page.locator('.calc-handle').click();
+  const rows = await page.locator('.calc-history li').count();
+  const panel = await page.locator('.calc-history').boundingBox();
+  const winBox = await calc.boundingBox();
+  ok(
+    'the tab opens a screen of its own beside the window, newest on top',
+    rows === 3 && panel.x + panel.width <= winBox.x + 1 && (await page.locator('.calc-history li b').first().innerText()) === '84',
+    JSON.stringify({ rows, panel, winBox }),
+  );
+  await page.locator('.calc-history li').last().locator('button').click();
+  ok('a line of the history brings its result back', (await page.locator('.calc-field').inputValue()) === '14');
+  const calcBefore = await calc.boundingBox();
+  const calcBar = await page.locator('.calc-bar').boundingBox();
+  ok('the title bar is thin', calcBar.height <= 30, `${calcBar.height}`);
+  await page.mouse.move(calcBar.x + 60, calcBar.y + calcBar.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(calcBar.x - 140, calcBar.y + calcBar.height / 2 + 120, { steps: 6 });
+  await page.mouse.up();
+  await wait(300);
+  const calcAfter = await calc.boundingBox();
+  ok(
+    'the title bar drags it',
+    Math.abs(calcAfter.x - calcBefore.x + 200) < 4 && Math.abs(calcAfter.y - calcBefore.y - 120) < 6,
+    JSON.stringify([calcBefore, calcAfter]),
+  );
+  const keyOf = (k) => page.locator(`.calc-keys button:text-is("${k}")`).first();
+  await keyOf('C').click();
+  for (const k of ['2', '×', '(', '3', '+', '4']) await keyOf(k).click();
+  ok('the bracket key opens a bracket', (await page.locator('.calc-field').inputValue()) === '2×(3+4');
+  await keyOf(')').click();
+  await page.locator('.calc-keys .equals').click();
+  ok('and the next press closes it', (await page.locator('.calc-field').inputValue()) === '14');
+  await page.locator('.calc-field').focus();
+  await page.keyboard.press('c');
+  await wait(100);
+  ok(
+    'C typed in its field clears it, as its C key does',
+    (await calc.count()) === 1 && (await page.locator('.calc-field').inputValue()) === '',
+  );
+  ok('the zero key takes one square', (await keyOf('0').boundingBox()).width < 60);
+  await page.locator('.calc-bar button[aria-label="Shrink the calculator"]').click();
+  await wait(200);
+  const calcStrip = await calc.boundingBox();
+  ok(
+    'shrunk it is a thin bar as wide as before, with the last result',
+    !(await page.locator('.calc-body').count()) &&
+      calcStrip.width === calcAfter.width &&
+      calcStrip.height <= 30 &&
+      (await page.locator('.calc-last').innerText()).includes('14'),
+    JSON.stringify(calcStrip),
+  );
+  await page.reload();
+  await page.waitForFunction(() => !document.querySelector('.boot') && !document.querySelector('.busy'), null, { timeout: 30000 });
+  await page.locator('.topbar .calc-button').click();
+  await wait(300);
+  ok(
+    'its list, place and size are kept',
+    (await page.locator('.calc .calc-last').count()) === 1 && Math.abs((await calc.boundingBox()).x - calcAfter.x) < 4,
+  );
+  await page.keyboard.press('c');
+  await wait(200);
+  ok('C closes it', (await page.locator('.calc').count()) === 0);
+  // Moved far right on a wide screen, then opened in a narrow window: it comes back onto the screen.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('ficsit-calc') ?? '{}');
+    localStorage.setItem('ficsit-calc', JSON.stringify({ ...s, at: { x: 5000, y: 3000 } }));
+  });
+  await page.keyboard.press('c');
+  await wait(200);
+  const away = await calc.boundingBox();
+  const view = page.viewportSize();
+  ok(
+    'a place off the screen is pulled back onto it',
+    away.x + away.width <= view.width && away.y + 28 <= view.height,
+    JSON.stringify(away),
+  );
+  ok('the button has no words', !(await page.locator('.topbar .calc-button').innerText()).trim());
   await ctx.close();
 }
 
@@ -2060,11 +2952,11 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     'Desc_SpaceElevatorPart_5_C',
     'Desc_CircuitBoard_C',
   ];
-  await open(factory(eight.map((i) => [i, 20])));
+  await open(manual(eight.map((i) => [i, 20])));
   await page.click('.deck-toggle');
   await wait(600);
-  await page.click('.floor-kind button >> nth=1');
   await settle();
+  await fit();
   await wait(1500);
   const names = await page.locator('.floor-io .item-card-name').allInnerTexts();
   const comes = await page.$$eval('.panel-body.manual section:nth-of-type(2) .floor-io-name', (l) =>
@@ -2080,14 +2972,15 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   );
 
   // The list and the transport view end above the buttons along the bottom, and the transport view has no hint to click a machine.
-  await page.locator('.floor-kind button >> nth=0').click();
+  await open(factory(eight.map((i) => [i, 20])));
+  await page.click('.deck-toggle');
   await settle();
   await wait(800);
   for (const [name, idx] of [
     ['list', 1],
     ['transport', 2],
   ]) {
-    await page.locator('.floor-bar .segmented:not(.floor-kind) button').nth(idx).click();
+    await pickView(idx);
     await wait(900);
     await page.evaluate(() => {
       for (const e of document.querySelectorAll('.table-wrap, .transport-wrap')) e.scrollTop = e.scrollHeight;
@@ -2101,8 +2994,7 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
       );
     });
     ok(`the ${name} view ends above the buttons along the bottom`, room >= 0, `${room}px`);
-    if (name === 'transport') ok('the transport view has no hint to click a machine', (await page.locator('.floor-hint').count()) === 0);
-    else ok('the list view keeps its hint', (await page.locator('.floor-hint').count()) === 1);
+    ok(`the ${name} view has no hint to click a machine`, (await page.locator('.floor-hint').count()) === 0);
   }
 
   // Leaving the map in the middle of a zoom must not trip Leaflet over the panes it has taken down.
@@ -2125,6 +3017,127 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
     await wait(600);
   }
   ok('leaving the map while it zooms raises no error', errors.length === before, errors.slice(before).join(' | '));
+  await ctx.close();
+}
+
+// ───────────────────────────── Milestones in the tier window ─────────────────────────────
+{
+  section = 'T';
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, reducedMotion: 'reduce', serviceWorkers: 'block' });
+  page = await ctx.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  const OIL = 'Schematic_5-1_C';
+  const plastic = (extra) =>
+    saved({
+      tier: 5,
+      mode: 'factory',
+      plans: [{ id: 'f1', name: 'Factory 1', targets: [{ item: 'Desc_Plastic_C', rate: 30 }] }],
+      active: 'f1',
+      ...extra,
+    });
+  const skippedNow = async () => {
+    await wait(350);
+    return page.evaluate(() => JSON.parse(localStorage.getItem('ficsit-planner')).state.skipped);
+  };
+  const bar = async () => (await page.locator('.tier-button:visible').first().innerText()).replace(/\s+/g, ' ').trim();
+  const window_ = async () => {
+    await page.click('.tier-button:visible');
+    await wait(300);
+  };
+  const done = async () => {
+    await page.click('.tier-dialog .primary-button');
+    await wait(1200);
+  };
+  const chip = (name) => page.locator('.tier-dialog .milestone-chip', { hasText: name });
+
+  await open(plastic());
+  ok('nothing skipped: the top bar says only the tier', /^tier 5$/i.test(await bar()), await bar());
+  await window_();
+  ok(
+    'the window lists the four Tier 5 milestones, all bought',
+    (await page.locator('.milestones .milestone-chip[aria-pressed=true]').count()) === 4,
+  );
+  ok('earlier tiers wait in a fold', /Earlier tiers \(3\)/.test(await page.locator('.earlier-tiers summary').innerText()));
+  ok('nothing says "not bought"', !(await page.locator('.tier-foot').innerText()).includes('not bought'));
+  await chip('Oil Processing').click();
+  await wait(200);
+  ok('a click marks it not bought', (await chip('Oil Processing').getAttribute('aria-pressed')) === 'false');
+  ok('and the window counts it', (await page.locator('.tier-foot').innerText()).includes('1 not bought'));
+  await page.locator('.tier-card', { hasText: 'Tier 6' }).first().click();
+  await wait(200);
+  ok('picking another tier leaves the window open', (await page.locator('.tier-dialog[open]').count()) === 1);
+  ok('and shows that tier\u2019s milestones', (await page.locator('.milestones .milestone-chip').count()) === 3);
+  ok('the one skipped earlier still counts', (await page.locator('.tier-foot').innerText()).includes('1 not bought'));
+  await page.locator('.tier-card', { hasText: 'Tier 5' }).first().click();
+  await wait(200);
+  await shot('t-window');
+  await done();
+  ok('Done closes it', (await page.locator('.tier-dialog[open]').count()) === 0);
+  ok('the top bar says Tier 5 \u00B7 1 off', /^tier 5 \u00B7 1 off$/i.test(await bar()), await bar());
+  ok('saved', JSON.stringify(await skippedNow()) === JSON.stringify([OIL]));
+  // Auto: the plastic can't be made, and the list offers the fix.
+  const missing = page.locator('.missing-list');
+  ok(
+    'Auto: Plastic waits for the milestone',
+    /Oil Processing milestone/.test(await missing.innerText()),
+    (await missing.innerText()).replace(/\n/g, ' '),
+  );
+  await shot('t-missing');
+  await page.reload();
+  await page.waitForFunction(() => !document.querySelector('.boot') && !document.querySelector('.busy'), null, { timeout: 30000 });
+  await wait(800);
+  ok('it survives a reload', /1 off/.test(await bar()));
+  await page.locator('.missing-list .chip.fix', { hasText: 'Mark Oil Processing as bought' }).click();
+  await wait(1500);
+  ok('Mark as bought: the list is gone', (await page.locator('.missing-list').count()) === 0);
+  ok('and the bar is back to Tier 5', /^tier 5$/i.test(await bar()), await bar());
+  ok('saved without it', (await skippedNow()).length === 0);
+
+  // Manual: the card says what it waits for, and the flag goes away when the milestone is bought.
+  await open(manual([['Desc_Plastic_C', 30]], { state: { tier: 5 } }));
+  await page.click('.deck-toggle').catch(() => {});
+  await wait(500);
+  await settle();
+  await fit();
+  await wait(1500);
+  ok('Manual: nothing flagged at first', (await page.locator('.card-flag').count()) === 0);
+  await window_();
+  await chip('Oil Processing').click();
+  await done();
+  const flagText = (await page.locator('.card-flag').allInnerTexts()).join('|');
+  ok('Manual: the cards say Needs Oil Processing', /needs oil processing/i.test(flagText), flagText);
+  await shot('t-manual-flag');
+  await window_();
+  await chip('Oil Processing').click();
+  await done();
+  ok('bought again: the flag is gone', (await page.locator('.card-flag').count()) === 0);
+  // The flag a tier gives goes the same way.
+  await window_();
+  await page.locator('.tier-card', { hasText: 'Tier 4' }).first().click();
+  await done();
+  ok('a lower tier flags them with the tier', /needs tier 5/i.test((await page.locator('.card-flag').allInnerTexts()).join('|')));
+  await window_();
+  await page.locator('.tier-card', { hasText: 'Tier 9' }).first().click();
+  await done();
+  ok('raised again: the flag is gone', (await page.locator('.card-flag').count()) === 0);
+
+  // Shortcuts: with locked parts shown, one that waits for a milestone names it.
+  await open(
+    saved({
+      tier: 5,
+      skipped: [OIL],
+      mode: 'factory',
+      plans: [{ id: 'f1', name: 'Factory 1', targets: [] }],
+      active: 'f1',
+      settings: { showLocked: true },
+    }),
+  );
+  await page.locator('.quick-search').fill('plastic');
+  await wait(300);
+  ok(
+    'Shortcuts: Plastic is tagged with the milestone',
+    /oil processing/i.test(await page.locator('.quick-item.locked .tier-tag').first().innerText()),
+  );
   await ctx.close();
 }
 
@@ -2237,28 +3250,23 @@ const clash = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && 
   ok('open ends button', (await page.locator('.open-ends').innerText()).includes('⚠'));
   await shot('c-built');
 
-  await open(factory([['Desc_Motor_C', 10]]));
-  await page.click('.floor-kind button >> nth=1');
+  await open(manual([['Desc_Motor_C', 10]]));
   await settle();
+  await fit();
   await wait(600);
   await shot('c-motor');
-  ok('converted on a phone, the whole floor in view', await allInView());
+  ok('on a phone, the whole floor in view', await allInView());
   const bar = await page.locator('.floor-bar').boundingBox();
   const controls = await page.locator('.floor-controls').boundingBox();
-  const kinds = await page.locator('.floor-kind').boundingBox();
   ok(
     'buttons along the bottom clear of each other',
-    !clash(controls, kinds) && !clash(controls, await page.locator('.floor-bar .segmented:not(.floor-kind)').boundingBox()),
+    !clash(controls, await page.locator('.floor-bar .segmented').boundingBox()),
     JSON.stringify({ bar, controls }),
   );
   const toolbar = await page.locator('.model-toolbar').boundingBox();
   ok('the toolbar clear of the totals tab', (await onTab()).length === 0, (await onTab()).join(', '));
   ok('toolbar fits across', toolbar.width <= 412, `${toolbar.width}`);
-  // Converted on a phone the floor runs down, as the Auto floor did there; the switch is along the bottom.
-  ok(
-    'converted on a phone, it runs down, the switch to turn it there',
-    (await model()).dir === 'TB' && (await page.locator('.floor-dir').isVisible()),
-  );
+  ok('on a phone the switch to turn the floor is along the bottom', await page.locator('.floor-dir').isVisible());
   // No hover tips on a phone, even where a tap lands on a button with one.
   await page.locator('.tool-button[aria-label="Numbers"]').tap();
   await page.locator('.tool-button[aria-label="Numbers"]').tap();

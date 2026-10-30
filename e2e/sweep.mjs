@@ -14,6 +14,7 @@ import path from 'node:path';
 import { chromium, firefox, webkit } from 'playwright-core';
 import { preview } from 'vite';
 import { inspectPage } from './checks.js';
+import { manualModel } from './manual.mjs';
 
 const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
 const QUICK = process.argv.includes('--quick');
@@ -38,7 +39,26 @@ const products = Object.keys(game.items).filter((id) => !game.items[id].raw && m
 const sample = (list, n) => (QUICK ? list.filter((_, i) => i % Math.ceil(list.length / n) === 0) : list);
 
 // Saved state the app reads on start: straight into a factory, a plant or a setting, with no first-run question.
-const saved = (state) => JSON.stringify({ state: { onboarded: true, tier: 9, lang: 'en', ...state }, version: 3 });
+const saved = (state) =>
+  JSON.stringify({
+    state: { onboarded: true, tier: 9, lang: 'en', ...state, settings: state.settings },
+    version: 4,
+  });
+// A Manual factory with the floor of the factory worked out for a product (10 a minute) on it.
+const manual = (item) =>
+  saved({
+    mode: 'factory',
+    plans: [
+      {
+        id: 'f1',
+        name: 'Factory 1',
+        targets: [{ item, rate: 10 }],
+        floor: 'manual',
+        model: manualModel([[item, 10]]),
+      },
+    ],
+    active: 'f1',
+  });
 const factory = (targets, extra = {}) =>
   saved({
     mode: 'factory',
@@ -104,6 +124,8 @@ async function run(size) {
   const check = async (name) => {
     where = name;
     screens++;
+    // A panel still settling can stick out for a moment; a page that stays too wide is still reported.
+    await page.waitForFunction(() => document.scrollingElement.scrollWidth <= innerWidth + 1, null, { timeout: 1500 }).catch(() => {});
     const list = await page.evaluate(inspectPage, { touch });
     for (const f of list) found.push({ size, where: name, ...f });
   };
@@ -144,7 +166,7 @@ async function run(size) {
             },
           ],
           active: 'f1',
-          settings: { autoSplitters: true },
+          settings: {},
         }),
       );
       await check('factory pipes with splitters');
@@ -168,13 +190,10 @@ async function run(size) {
         await page.waitForTimeout(500);
         await check(`inspector ${item}`);
       });
-    // The hand-built floor, made from the Auto one, and a machine on it picked.
+    // A hand-built floor, made for the same product, and a machine on it picked.
     for (const item of sample(products, 4).slice(0, QUICK ? 4 : 40))
       await step(`manual ${item}`, async () => {
-        await open(factory([item]));
-        const button = page.locator('.floor-kind button >> nth=1');
-        if (!(await button.count())) return;
-        await button.click();
+        await open(manual(item));
         await page.waitForFunction(() => !document.querySelector('.busy'), null, { timeout: 30000 });
         await page.waitForTimeout(1200);
         await check(`manual ${item}`);
@@ -185,7 +204,16 @@ async function run(size) {
         await check(`manual inspector ${item}`);
         // The chooser, from a right click on the floor and from a belt let go on it.
         await page.keyboard.press('Escape');
-        await page.locator('.react-flow__pane').click({ button: 'right', position: { x: 30, y: 200 } });
+        // A spot of the empty floor: on a tablet the Auto/Manual bar and the card panel cover the corner of it.
+        const free = await page.evaluate(() => {
+          const pane = document.querySelector('.react-flow__pane');
+          const r = pane.getBoundingClientRect();
+          for (let y = r.top + 200; y < r.bottom - 10; y += 40)
+            for (let x = r.left + 30; x < r.right - 10; x += 40)
+              if (document.elementFromPoint(x, y) === pane) return { x: x - r.left, y: y - r.top };
+          return { x: 30, y: 200 };
+        });
+        await page.locator('.react-flow__pane').click({ button: 'right', position: free });
         await page.waitForTimeout(300);
         await check(`manual chooser ${item}`);
         await page.keyboard.press('Escape');

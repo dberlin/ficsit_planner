@@ -9,6 +9,8 @@ const PATHS = {
   map: 'M3 6.5 9 4l6 2.5L21 4v13.5L15 20l-6-2.5L3 20z M9 4v13.5 M15 6.5V20',
   help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6 M12 17h.01',
   gear: 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4 1 2-3.4z',
+  // A pocket calculator: screen on top, keys below.
+  calculator: 'M5 3h14v18H5z M8 6h8v4H8z M8 14h.01 M12 14h.01 M16 14h.01 M8 18h.01 M12 18h.01 M16 18h.01',
   flag: 'M5 21V4 M5 4h11l-2 4 2 4H5',
   bug: 'M8 8a4 4 0 0 1 8 0 M7 10h10v4a5 5 0 0 1-10 0z M12 10v9 M3 12h4 M17 12h4 M4 7l3 2 M20 7l-3 2 M4 18l3-2 M20 18l-3-2',
   bulb: 'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V17h5v-1.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z',
@@ -26,6 +28,8 @@ const PATHS = {
   send: 'M3 11 21 3l-8 18-2-8z M11 13l10-10',
   download: 'M12 4v11 M7 10l5 5 5-5 M4 20h16',
   upload: 'M12 20V9 M7 14l5-5 5 5 M4 4h16',
+  /** An arrow going down into a tray: something comes in from outside (a game save). */
+  import: 'M12 3v11 M7.5 9.5 12 14l4.5-4.5 M4 13v7h16v-7',
   reset: 'M4 4v6h6 M5.5 15a7.5 7.5 0 1 0 1.8-7.8L4 10',
   trash: 'M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13',
   share:
@@ -41,7 +45,6 @@ const PATHS = {
   // One card feeding two, laid out left to right.
   tidy: 'M3 9.5h6v5H3z M15 4h6v5h-6z M15 15h6v5h-6z M9 12h3 M12 6.5v11 M12 6.5h3 M12 17.5h3',
   // Round arrows: start again.
-  rebuild: 'M20 11a8 8 0 0 0-14.3-4.9L4 8 M4 4v4h4 M4 13a8 8 0 0 0 14.3 4.9L20 16 M20 20v-4h-4',
   eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   eyeOff: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M4 4l16 16',
   chevronLeft: 'M15 5l-7 7 7 7',
@@ -54,7 +57,17 @@ const PATHS = {
 
 export type GlyphName = keyof typeof PATHS;
 
-export function Glyph({ name, size = 20, className }: { name: GlyphName; size?: number; className?: string }) {
+export function Glyph({
+  name,
+  size = 20,
+  className,
+  weight = 1.8,
+}: {
+  name: GlyphName;
+  size?: number;
+  className?: string;
+  weight?: number;
+}) {
   const filled = name === 'bolt' || name === 'github';
   return (
     <svg
@@ -65,7 +78,7 @@ export function Glyph({ name, size = 20, className }: { name: GlyphName; size?: 
       aria-hidden
       fill={filled ? 'currentColor' : 'none'}
       stroke={filled ? 'none' : 'currentColor'}
-      strokeWidth={1.8}
+      strokeWidth={weight}
       strokeLinecap="round"
       strokeLinejoin="round"
     >

@@ -2,10 +2,11 @@ import { type CSSProperties, type MouseEvent as ReactMouseEvent, useCallback, us
 import { createPortal } from 'react-dom';
 import { useT } from '../lib/i18n';
 import { useOverview } from '../lib/overview';
-import { shareTab } from '../lib/share';
+import { copyTab } from '../lib/share';
 import { useStore } from '../store';
 import { Glyph } from './Glyph';
 import { Icon } from './Icon';
+import { KindIcon } from './KindIcon';
 import { CardMenu } from './modeler/CardMenu';
 
 /** The tabs on screen: factories in the factory planner, power plants in the power planner. */
@@ -34,10 +35,10 @@ function useTabs() {
   return power
     ? {
         power,
-        list: plants.map((p) => ({ id: p.id, name: p.name, icon: p.plants[0]?.generator })),
+        list: plants.map((p) => ({ id: p.id, name: p.name, icon: p.plants[0]?.generator, manual: undefined as boolean | undefined })),
         active,
         select: (id: string) => set({ activePower: id, inspect: undefined }),
-        add: () => {
+        add: (_manual?: boolean) => {
           set({ overview: undefined });
           store().addPowerPlan(
             nextName(
@@ -54,16 +55,17 @@ function useTabs() {
       }
     : {
         power,
-        list: plans.map((p) => ({ id: p.id, name: p.name, icon: undefined as string | undefined })),
+        list: plans.map((p) => ({ id: p.id, name: p.name, icon: undefined as string | undefined, manual: p.floor === 'manual' })),
         active,
         select: (id: string) => set({ active: id, inspect: undefined }),
-        add: () => {
+        add: (manual?: boolean) => {
           set({ overview: undefined });
           store().addPlan(
             nextName(
               t('planName'),
               plans.map((p) => p.name),
             ),
+            manual,
           );
         },
         duplicate: (id: string) => store().duplicatePlan(id),
@@ -72,37 +74,6 @@ function useTabs() {
         label: t('planName'),
         addLabel: t('newPlan'),
       };
-}
-
-/**
- * Copies a link to the tab on screen (on phones, hands it to the share sheet), and says for a moment
- * what happened on the button itself.
- */
-export function ShareButton({ className = 'chrome-button', onDone }: { className?: string; onDone?: () => void }) {
-  const { t } = useT();
-  const tabs = useTabs();
-  const [shared, setShared] = useState<'copied' | 'failed'>();
-  useEffect(() => {
-    if (!shared) return;
-    const timer = setTimeout(() => setShared(undefined), 2500);
-    return () => clearTimeout(timer);
-  }, [shared]);
-  const name = tabs.list.find((p) => p.id === tabs.active)?.name ?? '';
-  return (
-    <button
-      type="button"
-      className={`${className} share-button ${shared ?? ''}`}
-      title={t('shareHint')}
-      onClick={async () => {
-        const r = await shareTab(name);
-        if (r === 'shared') return onDone?.();
-        setShared(r);
-      }}
-    >
-      <Glyph name={shared === 'copied' ? 'check' : 'share'} size={18} />
-      <span className="chrome-label">{shared === 'copied' ? t('linkCopied') : shared === 'failed' ? t('shareFailed') : t('share')}</span>
-    </button>
-  );
 }
 
 /** A right click on a tab or a row of the list: rename, duplicate and delete for that one, wherever it is. */
@@ -158,6 +129,7 @@ function useRowMenu() {
 export function PlanActions({ onDone }: { onDone?: () => void }) {
   const { t } = useT();
   const tabs = useTabs();
+  const [copied, setCopied] = useState<'copied' | 'failed'>();
   const set = useStore((s) => s.set);
   const active = tabs.active;
 
@@ -184,6 +156,22 @@ export function PlanActions({ onDone }: { onDone?: () => void }) {
       >
         <Glyph name="copy" size={18} />
         {t('duplicate')}
+      </button>
+      <button
+        type="button"
+        className="menu-item copy-factory"
+        title={t('copyFactoryHint')}
+        onClick={async () => {
+          setCopied(await copyTab());
+          // The row says what happened for a moment, then the menu goes.
+          setTimeout(() => {
+            setCopied(undefined);
+            onDone?.();
+          }, 900);
+        }}
+      >
+        <Glyph name={copied === 'copied' ? 'check' : 'share'} size={18} />
+        {copied === 'copied' ? t('linkCopied') : copied === 'failed' ? t('shareFailed') : t('copyFactory')}
       </button>
       <button
         type="button"
@@ -277,7 +265,7 @@ function PlanList({ at, onClose }: { at: { x: number; y: number }; onClose: () =
   // A plant with nothing in it yet isn't listed, as on the All page; the one open stays so the list shows where you are.
   const plants = o.plants.filter((p) => !p.empty || (power && !overview && p.id === activePower));
 
-  const add = (isPlant: boolean) => {
+  const add = (isPlant: boolean, manual = false) => {
     const s = useStore.getState();
     const nextName = (base: string, names: string[]) => {
       let n = names.length + 1;
@@ -298,6 +286,7 @@ function PlanList({ at, onClose }: { at: { x: number; y: number }; onClose: () =
           t('planName'),
           s.plans.map((p) => p.name),
         ),
+        manual,
       );
     onClose();
   };
@@ -376,6 +365,7 @@ function PlanList({ at, onClose }: { at: { x: number; y: number }; onClose: () =
               onClose();
             }}
           >
+            <KindIcon manual={f.manual} />
             <span className="plan-row-label">{f.name}</span>
             <span className="plan-row-mw">{f.pending || f.failed || f.empty ? '' : `${num(f.mw)} MW`}</span>
           </button>
@@ -410,7 +400,10 @@ function PlanList({ at, onClose }: { at: { x: number; y: number }; onClose: () =
       ))}
       <div className="plan-list-add">
         <button type="button" className="primary" onClick={() => add(false)}>
-          <span aria-hidden>+</span> {t('newPlan')}
+          <span aria-hidden>+</span> {t('newAutoPlan')}
+        </button>
+        <button type="button" className="primary" onClick={() => add(false, true)}>
+          <span aria-hidden>+</span> {t('newManualPlan')}
         </button>
         <button type="button" onClick={() => add(true)}>
           <span aria-hidden>+</span> {t('newPlant')}
@@ -435,6 +428,12 @@ export function PlanTabs() {
   const box = useRef<HTMLElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState<{ x: number; y: number }>();
+  // The + beside the factory tab asks which kind: a small menu under it. A power plant has only the one kind.
+  const [kinds, setKinds] = useState<{ x: number; y: number }>();
+  const zoom = useStore((x) => x.settings.uiScale);
+  const closeKinds = useCallback(() => setKinds(undefined), []);
+  // The menu closes on the press that starts a click on the +; that click must not open it again.
+  const wasOpen = useRef(false);
   const rowMenu = useRowMenu();
 
   useEffect(() => {
@@ -498,18 +497,51 @@ export function PlanTabs() {
           }}
         >
           {!overview && current?.icon && <Icon id={current.icon} size={22} className="plan-tab-icon" />}
+          {!overview && current?.manual !== undefined && <KindIcon manual={current.manual} />}
           <span className="plan-tab-label">{shown}</span>
           <span className="plan-caret" aria-hidden />
         </button>
       )}
-      <button type="button" className="plan-add" aria-label={tabs.addLabel} title={tabs.addLabel} onClick={tabs.add}>
+      <button
+        type="button"
+        className="plan-add"
+        aria-label={tabs.addLabel}
+        title={tabs.addLabel}
+        aria-haspopup={tabs.power ? undefined : 'menu'}
+        aria-expanded={tabs.power ? undefined : !!kinds}
+        onPointerDown={() => {
+          wasOpen.current = !!kinds;
+        }}
+        onClick={(e) => {
+          if (tabs.power) return tabs.add();
+          const r = e.currentTarget.getBoundingClientRect();
+          setKinds(wasOpen.current ? undefined : { x: r.left, y: r.bottom });
+          wasOpen.current = false;
+        }}
+      >
         +
       </button>
       <TabMenu />
       {rowMenu.menu}
+      {kinds &&
+        createPortal(
+          // A landmark of its own, since the menu is drawn outside the top bar (which would hold a fixed menu to its own box).
+          <div role="region" aria-label={t('newPlan')} className="plan-list-frame">
+            <CardMenu
+              at={{ x: kinds.x / zoom, y: kinds.y / zoom }}
+              items={[
+                { label: t('newAutoPlan'), lead: <KindIcon manual={false} />, note: t('newAutoPlanNote'), onPick: () => tabs.add(false) },
+                { label: t('newManualPlan'), lead: <KindIcon manual />, note: t('newManualPlanNote'), onPick: () => tabs.add(true) },
+              ]}
+              onClose={closeKinds}
+              fixed
+            />
+          </div>,
+          document.querySelector('.app') ?? document.body,
+        )}
       {open &&
         createPortal(
-          <div ref={list} className="plan-list-frame">
+          <div ref={list} className="plan-list-frame" role="region" aria-label={t('ovFactories')}>
             <PlanList at={open} onClose={() => setOpen(undefined)} />
           </div>,
           document.querySelector('.app') ?? document.body,

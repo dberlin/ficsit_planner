@@ -1,11 +1,14 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { data } from '../lib/data';
 import { useT } from '../lib/i18n';
 import { type FactoryRow, type PlantRow, useOverview } from '../lib/overview';
 import type { PoolParty } from '../lib/pool';
-import { useStore } from '../store';
+import { defaultEnabled, useStore } from '../store';
 import { Icon } from './Icon';
+import { KindIcon } from './KindIcon';
+import { MaterialsPanel } from './MaterialsPanel';
 import { RecipeBrowser } from './RecipeBrowser';
+import { SaveFactoryList } from './SaveFactories';
 import { RateChips } from './Summary';
 
 /** A list of items as icon-and-rate chips, or a dash when there are none. */
@@ -50,17 +53,19 @@ export function OverviewPage() {
   );
 }
 
-/** Marks the alternate and converter recipes the player has unlocked in the game; every new factory starts with them on. */
+/** The recipes every new factory starts with: the alternate and converter ones unlocked in the game, and the standard ones left on. */
 function UnlockedRecipes() {
   const { t } = useT();
   const unlocked = useStore((s) => s.unlocked);
+  const standardOff = useStore((s) => s.standardOff);
+  const enabled = [...defaultEnabled().filter((id) => !standardOff.includes(id)), ...unlocked];
   const setUnlocked = useStore((s) => s.setUnlocked);
   const applyUnlocked = useStore((s) => s.applyUnlocked);
   const behind = useStore((s) => s.plans.some((p) => s.unlocked.some((id) => !p.enabled.includes(id))));
   return (
     <RecipeBrowser
-      enabled={unlocked}
-      onToggle={(id) => setUnlocked([id], !unlocked.includes(id))}
+      enabled={enabled}
+      onToggle={(id) => setUnlocked([id], !enabled.includes(id))}
       onSet={setUnlocked}
       optionalOnly
       extra={
@@ -76,6 +81,7 @@ function Factories() {
   const { t, num, name } = useT();
   const set = useStore((s) => s.set);
   const o = useOverview();
+  const [materials, setMaterials] = useState(false);
   const { totals } = o;
   // The pool: what's left over added up, less what factories take from it; below zero, it's short.
   const left = o.pool.filter((l) => l.left > 0.01).map((l) => ({ item: l.item, rate: l.left }));
@@ -92,19 +98,28 @@ function Factories() {
   return (
     <>
       <div className="summary">
-        <div className="readouts">
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling area has to be reachable by keyboard */}
+        <div className="readouts" tabIndex={0}>
           <div className="readout power">
             <span className="readout-label">{t('ovPowerUsed')}</span>
             <span className="readout-value">
               {num(totals.used)} <small>MW</small>
             </span>
-            <span className={`readout-sub ${grid && totals.spare < -0.5 ? 'bad' : ''}`}>
+            <span
+              className={`readout-sub ${grid && totals.spare < -0.5 ? 'bad' : ''}`}
+              title={
+                grid
+                  ? t('ovMadeSplit', { made: num(totals.made), used: num(totals.used), own: num(totals.own), spare: num(totals.spare) })
+                  : undefined
+              }
+            >
               {!grid
                 ? t('ovNoPlants')
                 : totals.spare < -0.5
                   ? t('ovMadeShort', { made: num(totals.made), short: num(-totals.spare) })
                   : t('ovMadeSpare', { made: num(totals.made), spare: num(Math.max(0, totals.spare)) })}
             </span>
+            {grid && totals.own > 0.5 && <span className="readout-sub">{t('ovMadeOwn', { own: num(totals.own) })}</span>}
           </div>
           <div className="readout">
             <span className="readout-label">{t('machines')}</span>
@@ -137,7 +152,7 @@ function Factories() {
         </div>
       </div>
 
-      <div className="ov-scroll">
+      <div className={`ov-scroll ${materials ? 'with-side' : ''}`}>
         {o.pool.length > 0 && (
           <section className="ov-section">
             <h2 className="ov-title">{t('ovPool')}</h2>
@@ -195,7 +210,12 @@ function Factories() {
         )}
 
         <section className="ov-section">
-          <h2 className="ov-title">{t('ovFactories')}</h2>
+          <div className="ov-head">
+            <h2 className="ov-title">{t('ovFactories')}</h2>
+            <button type="button" className="text-button" onClick={() => setMaterials((on) => !on)}>
+              {t('materials')}
+            </button>
+          </div>
           <table className="ov-table">
             <thead>
               <tr>
@@ -210,10 +230,10 @@ function Factories() {
               {o.factories.map((f) => (
                 <tr key={f.id}>
                   <td className="ov-name">
+                    <KindIcon manual={f.manual} />
                     <button type="button" onClick={() => open(f.id, false)}>
                       {f.name}
                     </button>
-                    {f.manual && <small className="ov-tag">{t('ovHandBuilt')}</small>}
                   </td>
                   {f.empty ? (
                     <td colSpan={4} className="ov-empty">
@@ -238,6 +258,8 @@ function Factories() {
             </tbody>
           </table>
         </section>
+
+        <SaveFactoryList />
 
         {plants.length > 0 && (
           <section className="ov-section">
@@ -280,6 +302,7 @@ function Factories() {
           </section>
         )}
       </div>
+      {materials && <MaterialsPanel onClose={() => setMaterials(false)} />}
     </>
   );
 }

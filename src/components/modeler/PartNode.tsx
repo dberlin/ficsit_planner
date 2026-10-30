@@ -14,6 +14,7 @@ import { describeUse } from '../../lib/solver';
 import { minerLabel, recipeLabel } from '../../lib/text';
 import { modBar, RunLine } from '../GraphView';
 import { Icon } from '../Icon';
+import { PoolToggle } from '../PoolToggle';
 import { Slot } from '../Slot';
 
 /** Which way the floor runs: a card's ends go on its sides or along its top and bottom. */
@@ -37,6 +38,7 @@ export function useFlagText() {
   return (f: Flag, long = false): string => {
     if (f.k === 'off') return t('flagOff');
     if (f.k === 'tier') return t('needsTier', { tier: f.tier });
+    if (f.k === 'milestone') return t('needsMilestone', { name: f.name });
     if (!long) return t('flagCap');
     return t(f.world ? 'flagWorldLong' : 'flagCapLong', { item: name(data.items[f.item]), rate: num(f.rate), cap: num(f.cap) });
   };
@@ -360,7 +362,7 @@ function Endpoint({ data: d, selected }: { data: PartData; selected: boolean }) 
   const it = item ? data.items[item] : undefined;
   return (
     <div
-      className={`endpoint-node manual ${kind} ${selected ? 'selected' : ''} ${n.done ? 'done' : ''}`}
+      className={`endpoint-node manual ${kind === 'target' ? 'goal' : kind} ${selected ? 'selected' : ''} ${n.done ? 'done' : ''}`}
       style={{ ...grid(n, dir), ...(it && it.form !== 'solid' ? { ['--fluid-color' as string]: pipeColor(it) ?? 'var(--fluid)' } : {}) }}
     >
       <FlagTag id={n.id} />
@@ -375,7 +377,7 @@ function Endpoint({ data: d, selected }: { data: PartData; selected: boolean }) 
           ×
         </button>
       )}
-      {it ? <Slot id={it.id} size={60} tone={kind === 'target' ? 'target' : 'default'} /> : <span className="slot-empty" />}
+      {it ? <Slot id={it.id} size={60} tone={kind === 'target' ? 'goal' : 'default'} /> : <span className="slot-empty" />}
       <span className="endpoint-text">
         <span className="endpoint-kind">{n.label ?? label}</span>
         <span className="endpoint-name" title={it ? name(it) : undefined}>
@@ -392,6 +394,8 @@ function Endpoint({ data: d, selected }: { data: PartData; selected: boolean }) 
           {n.k === 'extract' && calc?.status !== 'partial' && <Status calc={calc} />}
         </span>
       </span>
+      {/* An output that has an item can be offered to the pool, as on the Auto floor. */}
+      {n.k === 'out' && n.tag !== 'spare' && item && <PoolToggle item={item} />}
     </div>
   );
 }

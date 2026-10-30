@@ -1,28 +1,31 @@
+import { offAt, skipKey } from './lib/unlocks';
 import { useShallow } from 'zustand/react/shallow';
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useCodexRoute } from './components/codex/route';
-import { autoDir, type FactoryLinks, GraphView } from './components/GraphView';
+import { type FactoryLinks, GraphView } from './components/GraphView';
 import { Glyph } from './components/Glyph';
 import { Inspector } from './components/Inspector';
+import { ViewMenu } from './components/ViewMenu';
+import { useTallPanel } from './lib/tallPanel';
 import { MapNav } from './components/MapNav';
 import { MissingList } from './components/MissingList';
+import { Calculator } from './components/Calculator';
 import { MobileMenu, MobileNav } from './components/MobileChrome';
 import { MovedNotice } from './components/MovedNotice';
 import { SaveFailedNotice } from './components/SaveFailedNotice';
 import { PollCard } from './components/PollCard';
 import { ModeSwitch } from './components/ModeSwitch';
 import { OverviewPage } from './components/Overview';
-import { PlanTabs, ShareButton } from './components/PlanTabs';
+import { PlanTabs } from './components/PlanTabs';
 import { PlantInspector, PowerQuickStart, PowerSummary } from './components/PowerFloor';
 import { PowerPanel } from './components/PowerPanel';
 import { InstallButton, ClosedTab, Notice, PwaStatus } from './components/PwaStatus';
 import { useFactoryHost, useModelCalc } from './components/modeler/hosts';
 import { FloorPanel } from './components/modeler/FloorPanel';
 import { forgetCamera, ModelEditor } from './components/modeler/ModelEditor';
-import { floorEnds } from './lib/model/calc/adapter';
 import { applyArrangement, arrangement } from './lib/model/arrange';
 import { dirOf } from './lib/model/layout';
-import { ModelInspector } from './components/modeler/ModelInspector';
+import { AutoAreaPanel, ModelInspector } from './components/modeler/ModelInspector';
 import { ModelToolbar } from './components/modeler/Toolbar';
 import { QuickPick } from './components/QuickPick';
 import { RecipesPanel } from './components/RecipesPanel';
@@ -50,14 +53,14 @@ import { failureText } from './lib/solveFailure';
 import { fold } from './lib/fold';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { useUndoKeys } from './lib/undoKeys';
+import { startAutoBackup } from './lib/autobackup';
 import { startPolls } from './lib/polls';
+import { SaveButton, SaveFlow } from './components/SaveButton';
 import { LATEST_UPDATE } from './locales/updates.en';
 import { useSolverLoading, useSolverReady } from './lib/solverClient';
 import { bootDone, bootText } from './lib/boot';
-import { modelFromSolve } from './lib/model/fromAuto';
 import { emptyModel, type Model } from './lib/model/types';
-import { calcAsync, solveAsync } from './lib/solverClient';
-import { activePowerPlan, aimOf, POOL, usePlan, useStore } from './store';
+import { activePowerPlan, aimOf, POOL, usePlan, useStore, useTier } from './store';
 
 // Folding the panel moves the app's grid tracks: above the floor a row, beside it a column.
 const GRID = ['gridTemplateRows', 'gridTemplateColumns'] as const;
@@ -88,7 +91,7 @@ const CodexPage = lazy(() => import('./components/Codex').then((m) => ({ default
  */
 function useSolutions() {
   const mode = useStore((s) => s.mode);
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
   const clocks = useStore((s) => s.settings.clockSpread);
@@ -99,28 +102,33 @@ function useSolutions() {
   const manual = plan.floor === 'manual';
   const pp = useStore(activePowerPlan);
   const draws = useFactoryDraws(mode === 'power');
-  const load = powerLoad(pp, draws);
-  const { plants, sizeBy, have, headroom, ownLoad, chain } = pp;
+  const { plants, sizeBy, have, headroom, ownLoad, chain, want, factories, extra } = pp;
+  // The same object until something it is made from changes: the power floor is laid out again for a new one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pp is read through its fields
+  const load = useMemo(() => powerLoad(pp, draws), [sizeBy, want, factories, extra, draws]);
 
   const { targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights } = plan;
   const exports = useExports(plan.id);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const factoryIn = useMemo(
     () => factoryInput({ targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights }, tier, exports, aim, game, clocks),
-    [targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights, tier, exports, aim, game, clocks],
+    [targets, supplies, enabled, caps, mods, fixed, extraction, separate, weights, tier, exports, aim, game, clocks, skipKey()],
   );
   // Sized to what you have with nothing listed yet: nothing to solve, the floor asks for the list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const powerIn = useMemo(
     () =>
       sizeBy === 'have' && have.length === 0
         ? undefined
         : powerInput({ plants, sizeBy, have, headroom, ownLoad, chain }, load.demand, tier, aim, game, clocks),
-    [plants, sizeBy, have, headroom, ownLoad, chain, load.demand, tier, aim, game, clocks],
+    [plants, sizeBy, have, headroom, ownLoad, chain, load.demand, tier, aim, game, clocks, skipKey()],
   );
   // Sized to what you have: the same plant making a set 1,000 MW shows what its fuel is made from.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const probeIn = useMemo(
     () =>
       sizeBy === 'have' ? powerInput({ plants, sizeBy: 'want', have, headroom, ownLoad, chain }, 1000, tier, aim, game, clocks) : undefined,
-    [plants, sizeBy, have, headroom, ownLoad, chain, tier, aim, game, clocks],
+    [plants, sizeBy, have, headroom, ownLoad, chain, tier, aim, game, clocks, skipKey()],
   );
   const factory = useSolve(factoryIn, mode === 'factory' && !manual);
   const hand = useModelCalc(manual ? (plan.model ?? emptyModel()) : undefined, tier, game, mode === 'factory' && manual);
@@ -129,15 +137,28 @@ function useSolutions() {
   return { factory, power, probe: probe.result, draws, load, hand, manual };
 }
 
+/** The windows that open over the app. Apart from App, so opening and closing one doesn't draw the whole app again. */
+function Dialogs() {
+  const dialog = useStore((x) => x.dialog);
+  const set = useStore((x) => x.set);
+  return (
+    <>
+      {dialog === 'settings' && <SettingsDialog onClose={() => set({ dialog: undefined, settingsAt: undefined })} />}
+      {dialog === 'report' && <ReportDialog onClose={() => set({ dialog: undefined })} />}
+    </>
+  );
+}
+
 export default function App() {
   const { t, lang } = useT();
+  useTallPanel();
+  const tierOff = useStore((x) => offAt(x.tier, x.skipped));
   const s = useStore(
     useShallow((x) => ({
       activePower: x.activePower,
       deckClosed: x.deckClosed,
       customWeights: x.customWeights,
       deckHeight: x.deckHeight,
-      dialog: x.dialog,
       equalWeights: x.equalWeights,
       fewestBuildings: x.fewestBuildings,
       graphDir: x.graphDir,
@@ -150,7 +171,6 @@ export default function App() {
       power: x.power,
       seenUpdates: x.seenUpdates,
       set: x.set,
-      setFloor: x.setFloor,
       settings: x.settings,
       sideWidth: x.sideWidth,
       tab: x.tab,
@@ -186,6 +206,7 @@ export default function App() {
   // The opening screen tells how far along things are, and goes once the solver is ready and the first answer is in.
   const answered = !!result || !!error;
   useEffect(startPolls, []);
+  useEffect(startAutoBackup, []);
   useEffect(() => {
     if (!solverReady)
       return bootText(solverLoad === undefined ? t('loadingGame') : `${t('loadingSolver')} ${Math.round(solverLoad * 100)}%`);
@@ -202,72 +223,25 @@ export default function App() {
       setLaying(false);
     }
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   const autoExtraction = useMemo(
     () => (solved.result ? planExtraction(solved.result.raw, effectiveExtraction(plan.extraction, s.tier)) : []),
-    [solved.result, plan.extraction, s.tier],
+    [solved.result, plan.extraction, s.tier, skipKey()],
   );
   const extraction = manual ? (hand.adapted?.extraction ?? []) : autoExtraction;
-  /** Auto or Manual: the first switch to Manual starts from the factory as worked out, or an empty floor. */
-  // A model built afresh opens with a fresh camera.
+  // A model laid out afresh opens with a fresh camera.
   const [built, setBuilt] = useState(0);
-  const setFloor = async (floor: 'auto' | 'manual') => {
-    if (floor === 'auto' || plan.model) return s.setFloor(plan.id, floor);
-    const solved = factory.result;
-    // Running the way the Auto floor did.
-    const model = solved
-      ? await lay(() => modelFromSolve(solved, s.tier, effectiveExtraction(plan.extraction, s.tier), s.graphDir ?? autoDir(), plan.built))
-      : emptyModel();
-    forgetCamera(plan.id);
-    setBuilt((n) => n + 1);
-    s.setFloor(plan.id, 'manual', model);
-  };
   const exports = useExports(plan.id);
-  // Rebuilding a hand-built floor starts from what its panel lists: the floor's own outputs and inputs. Those become
-  // the factory's targets too, so Auto and Manual agree afterwards.
-  // With the numbers hidden the floor carries nothing to read them from, so they're worked out once on the click.
-  const hidden = plan.model?.calc === 'off';
-  const ends = useMemo(
-    () => (manualPlan && plan.model && !hidden ? floorEnds(plan.model, hand.calc) : undefined),
-    [manualPlan, plan.model, hand.calc, hidden],
-  );
-  const canRebuild = hidden ? !!plan.model?.nodes.some((n) => n.k === 'out' && n.tag !== 'spare') : !!ends?.targets.length;
-  const rebuild = async () => {
-    const m = plan.model;
-    if (!m || !window.confirm(t('rebuildConfirm'))) return;
-    try {
-      const from = hidden ? floorEnds(m, await calcAsync({ model: { ...m, calc: 'basic' }, tier: s.tier, game: s.settings.game })) : ends;
-      if (!from?.targets.length) return;
-      // A supply taken from another factory tab stays taken from it.
-      const supplies = from.supplies.map((x) => {
-        const tab = plan.supplies.find((y) => y.item === x.item)?.from;
-        return tab ? { ...x, from: tab } : x;
-      });
-      const input = factoryInput(
-        { ...plan, targets: from.targets, supplies },
-        s.tier,
-        exports,
-        aimOf(s),
-        s.settings.game,
-        s.settings.clockSpread,
-      );
-      if (!input) return;
-      const r = await solveAsync(input);
-      const model = await lay(() => modelFromSolve(r, s.tier, effectiveExtraction(plan.extraction, s.tier), dirOf(m), plan.built));
-      forgetCamera(plan.id);
-      setBuilt((n) => n + 1);
-      s.updatePlan({ targets: from.targets, supplies });
-      s.setFloor(plan.id, 'manual', model);
-    } catch {
-      /* the Auto floor shows why it can't be solved */
-    }
-  };
 
   // Tidying up, or turning the floor the other way: laid out afresh, one step to undo, the whole floor in view.
   // A second click while one is still being worked out does nothing, and the layout goes onto the floor as it is by
   // then, so a card moved meanwhile isn't lost.
   const arrange = async (m: Model) => {
     if (laying) return;
+    const forPlan = plan.id;
     const laid = await lay(() => arrangement(m));
+    // Another tab came up while it was worked out: this layout is not for that floor.
+    if (useStore.getState().active !== forPlan) return;
     host.edit((now) => {
       const { dir: _, ...rest } = now;
       return applyArrangement(dirOf(m) === 'TB' ? { ...rest, dir: 'TB' } : rest, laid);
@@ -284,6 +258,21 @@ export default function App() {
   // Someone who has used the app before sees a dot on the gear until they open the new notes.
   const newUpdates = s.onboarded && s.seenUpdates !== LATEST_UPDATE;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [calcOpen, setCalcOpen] = useState(false);
+  // C opens and closes the calculator, unless it would be typed into a field or a dialog is open. Inside the
+  // calculator's field C clears, as its own C key does.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'c' || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      const el = e.target as HTMLElement;
+      const field = el.closest?.('input, textarea, select, [contenteditable]');
+      if (field || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      setCalcOpen((o) => !o);
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
 
   // Power planner: the chain's own draw (machines plus the miners and pumps feeding them), and who the plant feeds.
   const chainDraw = powerMode && result ? result.power + extraction.reduce((sum, u) => sum + u.power, 0) : 0;
@@ -386,9 +375,20 @@ export default function App() {
         {bookMode ? <span className="topbar-fill" /> : <PlanTabs />}
         <div className="topbar-controls">
           <InstallButton />
-          {!bookMode && !overviewOn && <ShareButton />}
+          <SaveButton />
           <button type="button" className="tier-button" title={t('unlockedTier')} onClick={() => setTierOpen(true)}>
             {t('tier')} <b>{s.tier}</b>
+            {tierOff > 0 && <span className="tier-off"> · {t('tierOff', { n: tierOff })}</span>}
+          </button>
+          <button
+            type="button"
+            className="chrome-button calc-button"
+            title={`${t('calculator')} (C)`}
+            aria-label={t('calculator')}
+            aria-pressed={calcOpen}
+            onClick={() => setCalcOpen(!calcOpen)}
+          >
+            <Glyph name="calculator" size={22} weight={1.2} />
           </button>
           <button type="button" className="chrome-button settings" title={t('settings')} onClick={() => s.set({ dialog: 'settings' })}>
             <Glyph name="gear" size={20} />
@@ -541,12 +541,7 @@ export default function App() {
               ) : manual ? (
                 <>
                   <ModelEditor key={built} host={host} calc={hand.calc} onArrange={arrange} />
-                  <ModelToolbar
-                    host={host}
-                    onTidy={() => arrange(host.model)}
-                    onRebuild={canRebuild ? rebuild : undefined}
-                    unbounded={hand.calc?.unbounded}
-                  />
+                  <ModelToolbar host={host} onTidy={() => arrange(host.model)} unbounded={hand.calc?.unbounded} />
                 </>
               ) : (
                 <GraphView result={result} extraction={extraction} consumers={consumers} links={links} />
@@ -556,44 +551,19 @@ export default function App() {
                 <ModelInspector host={host} calc={hand.calc} />
               ) : inspectPlant ? (
                 <PlantInspector key={inspectPlant} result={result} />
-              ) : (
+              ) : consumers ? (
                 <Inspector result={result} />
+              ) : (
+                <AutoAreaPanel fallback={<Inspector result={result} />} />
               ))}
             {busy && <Busy solverLoad={solverLoad} />}
             {laying && <div className="busy laying-out">{t('layingOut')}</div>}
             {shown && (
               <div className="floor-bar">
-                {!powerMode && (
-                  <div className="segmented floor-kind" role="radiogroup" aria-label={t('floorKind')}>
-                    <button type="button" role="radio" aria-checked={!manual} title={t('autoHint')} onClick={() => setFloor('auto')}>
-                      {t('floorAuto')}
-                    </button>
-                    <button type="button" role="radio" aria-checked={manual} title={t('manualHint')} onClick={() => setFloor('manual')}>
-                      {t('floorManual')}
-                    </button>
-                  </div>
-                )}
-                <div className="segmented" role="radiogroup">
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={s.view === 'graph' || (powerMode && s.view === 'transport')}
-                    onClick={() => s.set({ view: 'graph' })}
-                  >
-                    {t('graph')}
-                  </button>
-                  <button type="button" role="radio" aria-checked={s.view === 'table'} onClick={() => s.set({ view: 'table' })}>
-                    {t('table')}
-                  </button>
-                  {!powerMode && (
-                    <button type="button" role="radio" aria-checked={s.view === 'transport'} onClick={() => s.set({ view: 'transport' })}>
-                      {t('transportView')}
-                    </button>
-                  )}
-                </div>
-                {!s.inspect && !manual && (powerMode || s.view !== 'transport') && (
+                <ViewMenu powerMode={powerMode} />
+                {!s.inspect && powerMode && (
                   <span className="floor-hint-slot">
-                    <span className="floor-hint">{powerMode ? t('inspectPowerHint') : t('inspectHint')}</span>
+                    <span className="floor-hint">{t('inspectPowerHint')}</span>
                   </span>
                 )}
               </div>
@@ -602,10 +572,11 @@ export default function App() {
         )}
       </main>
       <MobileNav />
-      {menuOpen && <MobileMenu onClose={() => setMenuOpen(false)} onTier={() => setTierOpen(true)} />}
+      {menuOpen && <MobileMenu onClose={() => setMenuOpen(false)} onTier={() => setTierOpen(true)} onCalc={() => setCalcOpen(true)} />}
+      {calcOpen && <Calculator onClose={() => setCalcOpen(false)} />}
       {(!s.onboarded || tierOpen) && <TierDialog onClose={() => setTierOpen(false)} />}
-      {s.dialog === 'settings' && <SettingsDialog onClose={() => s.set({ dialog: undefined })} />}
-      {s.dialog === 'report' && <ReportDialog onClose={() => s.set({ dialog: undefined })} />}
+      <Dialogs />
+      <SaveFlow />
       <TipLayer />
       <Notice />
       <MovedNotice />

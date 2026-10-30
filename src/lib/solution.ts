@@ -1,6 +1,7 @@
+import { skipKey } from './unlocks';
 import { type GameRules, isDefaultGame } from './game';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { aimOf, exportsOf, type Plan, poweredBy, type PowerPlan, useStore } from '../store';
+import { aimOf, exportsOf, type Plan, poweredBy, type PowerPlan, useStore, useTier } from '../store';
 import { data, recipeById, recipeUnlocked } from './data';
 import {
   capsWithNodes,
@@ -153,12 +154,22 @@ export function powerInput(
   };
 }
 
+// Every store change runs the selectors, and the plans are the same array until a plan changes: work it out once per array.
+const exportKeys = new WeakMap<object, Map<string, string>>();
+function exportsKey(plans: Parameters<typeof exportsOf>[0], id: string): string {
+  const byId = exportKeys.get(plans) ?? new Map<string, string>();
+  exportKeys.set(plans, byId);
+  const key = byId.get(id) ?? JSON.stringify(exportsOf(plans, id));
+  byId.set(id, key);
+  return key;
+}
+
 /**
  * What other tabs take from this factory. Kept as the same array while nothing about it changes, so
  * editing an unrelated tab doesn't solve this one again.
  */
 export function useExports(id: string): Export[] {
-  const key = useStore((s) => JSON.stringify(exportsOf(s.plans, id)));
+  const key = useStore((s) => exportsKey(s.plans, id));
   return useMemo(() => JSON.parse(key) as Export[], [key]);
 }
 
@@ -234,7 +245,7 @@ interface Entry {
 }
 
 const drawKey = (tier: number, exports: Export[], aim: Aim, game: GameRules, each: boolean, clocks: ClockSpread) =>
-  `${tier}|${aim}|${game.parts}|${game.power}|${each}|${clocks}|${JSON.stringify(exports)}`;
+  `${tier}|${skipKey()}|${aim}|${game.parts}|${game.power}|${each}|${clocks}|${JSON.stringify(exports)}`;
 
 // Solved draws, kept per plan object and tier: an unchanged factory isn't solved again, and a late
 // answer for one tier can't overwrite another's.
@@ -267,7 +278,10 @@ function entryFor(plan: Plan, tier: number, exports: Export[], aim: Aim, game: G
   } else {
     const input = factoryInput(plan, tier, exports, aim, game, clocks);
     if (!input) entry.draw = { mw: 0 };
-    else entry.wait = solveAsync(input).then((r) => done(r, planExtraction(r.raw, effectiveExtraction(plan.extraction, tier))), failed);
+    else {
+      const extraction = effectiveExtraction(plan.extraction, tier);
+      entry.wait = solveAsync(input).then((r) => done(r, planExtraction(r.raw, extraction)), failed);
+    }
   }
   byTier.set(key, entry);
   return entry;
@@ -289,13 +303,14 @@ export interface FactoryEntry extends FactoryDraw {
  */
 export function useFactoryEntries(enabled: boolean): FactoryEntry[] {
   const plans = useStore((s) => s.plans);
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const aim = useStore(aimOf);
   const game = useStore((s) => s.settings.game);
   const each = useStore((s) => s.settings.splitLines) === 'each';
   const clocks = useStore((s) => s.settings.clockSpread);
   const [landed, bump] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
   useEffect(() => {
     if (!enabled) return;
     let live = true;
@@ -306,7 +321,7 @@ export function useFactoryEntries(enabled: boolean): FactoryEntry[] {
     return () => {
       live = false;
     };
-  }, [enabled, plans, tier, aim, game, each, clocks]);
+  }, [enabled, plans, tier, aim, game, each, clocks, skipKey()]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `landed` re-reads the cache once a solve lands.
   return useMemo(
@@ -325,7 +340,7 @@ export function useFactoryEntries(enabled: boolean): FactoryEntry[] {
           machines: entry?.machines,
         };
       }),
-    [plans, tier, aim, game, each, clocks, landed],
+    [plans, tier, aim, game, each, clocks, landed, skipKey()],
   );
 }
 

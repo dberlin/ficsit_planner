@@ -24,6 +24,27 @@ export interface MachineNodeData extends Record<string, unknown> {
   group?: { n: number; of: number };
   /** One per belt end, placed by the layout. */
   ports?: Port[];
+  /** An end for each item the card takes and gives, in the order that keeps its belts from crossing; set once the cards have their places. */
+  ends?: CardEnds;
+  /** Lines and columns the card grew by, to give every end room for the belts side by side on it. */
+  room?: { rows: number; cols: number };
+}
+
+/** One end of a machine card: a square on its edge holding the item's icon, with the belts for that item going into it. */
+export interface CardEnd {
+  /** The belt's per-edge handle id, or a stable id for an item with no belt. */
+  id: string;
+  /** The item it takes or gives; none for a generator's power line. */
+  item?: string;
+  /** Where its middle is along its side, as a share of the side. */
+  at: number;
+  /** How long it is along the side, in floor units: as wide as the belts side by side that meet it. */
+  len: number;
+}
+
+export interface CardEnds {
+  in: CardEnd[];
+  out: CardEnd[];
 }
 
 /** Who draws from the grid: a factory, the fuel chain itself, what the player typed in, or the output sent on. */
@@ -127,6 +148,145 @@ export const portSpots = (n: number): number[] => (n <= 1 ? [0.5] : Array.from({
 /** Which of `total` ends the `used` ones sit on, in order: one in the middle, two on the outer ends, three on all. */
 export const slotsFor = (used: number, total: number): number[] =>
   total <= 1 ? [0] : used === 1 ? [Math.floor(total / 2)] : used === 2 && total === 3 ? [0, 2] : Array.from({ length: used }, (_, i) => i);
+
+/** A card's end is a square this big, kept this far from the next one, and sits this far over the card's side so it is joined to it (card scale 1). */
+export const END = 26;
+const END_GAP = 8;
+const END_LAP = 2;
+export const END_REACH = END - END_LAP;
+/** The generator's power line among its ends. */
+const POWER = 'power';
+/** A card that must be wider to hold its ends grows by this much at a time, as it grows by a line for more clock groups. */
+const WIDE_STEP = 40;
+
+/** What a machine card gives ends for: the items it takes and gives, in the recipe's order. */
+const keysOf = (d: MachineNodeData) => ({
+  in: d.use.recipe.inputs.map((s) => s.item),
+  out: [...d.use.recipe.outputs.map((s) => s.item), ...(d.use.recipe.kind === 'power' ? [POWER] : [])],
+});
+/** Which end of its machine a belt (or a generator's power line) is on. */
+const keyOf = (e: Edge) => (e.type === 'power' ? POWER : (e.data as FlowEdgeData).item);
+
+/** Most belts side by side any belt of an item has at a card's side. */
+function lanesAt(edges: Edge[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const e of edges) {
+    if (e.type !== 'flow') continue;
+    const lanes = Math.min((e.data as FlowEdgeData).lanes, MAX_LANES);
+    for (const k of [`${e.source}|o|${keyOf(e)}`, `${e.target}|i|${keyOf(e)}`]) m.set(k, Math.max(m.get(k) ?? 1, lanes));
+  }
+  return m;
+}
+
+/** How long an end is: the belts side by side that meet it, never less than its square. */
+const endLen = (lanes: number | undefined, scale: number) => Math.max(END * scale, (lanes ?? 1) * LANE_PITCH);
+
+/** The ends of one card, in the order given, spread along a side of `side` floor units with the same room between them. */
+function cardEnds(id: string, order: { in: string[]; out: string[] }, lanes: Map<string, number>, side: number, scale: number): CardEnds {
+  const row = (p: 'i' | 'o', keys: string[]): CardEnd[] => {
+    const len = keys.map((key) => endLen(key === POWER ? 1 : lanes.get(`${id}|${p}|${key}`), scale));
+    const gap = (side - len.reduce((a, b) => a + b, 0)) / (keys.length + 1);
+    let from = gap;
+    return keys.map((key, i) => {
+      const at = (from + len[i] / 2) / side;
+      from += len[i] + gap;
+      return { id: `${p}${i}`, ...(key === POWER ? {} : { item: key }), at, len: len[i] };
+    });
+  };
+  return { in: row('i', order.in), out: row('o', order.out) };
+}
+
+/**
+ * Makes a machine card big enough for its ends: every end as long as the belts side by side on it, with room between.
+ * It grows by lines (down a floor running right) or columns (across a floor running down), only when it has to.
+ */
+export function growCards(nodes: Node[], edges: Edge[], box: (size: Box) => Box, scale: number, dir: Direction) {
+  const lanes = lanesAt(edges);
+  for (const n of nodes) {
+    if (n.type !== 'machine') continue;
+    const d = n.data as MachineNodeData;
+    const keys = keysOf(d);
+    const room = (p: 'i' | 'o', list: string[]) =>
+      list.reduce(
+        (sum, key) => sum + endLen(key === POWER ? 1 : lanes.get(`${n.id}|${p}|${key}`), scale),
+        END_GAP * scale * (list.length + 1),
+      );
+    const need = Math.max(room('i', keys.in), room('o', keys.out));
+    const base = cardExtra(d.use, d.split ?? d.part);
+    let [rows, cols] = [0, 0];
+    while (dir !== 'TB' && box({ ...SIZE.machine, height: SIZE.machine.height + RUN_LINE * (base + rows) }).height < need) rows++;
+    while (dir !== 'LR' && box({ ...SIZE.machine, width: SIZE.machine.width + WIDE_STEP * cols }).width < need) cols++;
+    if (!rows && !cols) continue;
+    const b = box({ width: SIZE.machine.width + WIDE_STEP * cols, height: SIZE.machine.height + RUN_LINE * (base + rows) });
+    n.width = b.width;
+    n.height = b.height;
+    n.data = { ...d, room: { rows, cols } };
+  }
+}
+
+/**
+ * Item ends before layout. Every recipe item gets a port, including an unused byproduct; connected ends keep the
+ * belt's unique handle id. ELK chooses their order and offsets together with the routes.
+ */
+export function machineEnds(nodes: Node[], edges: Edge[], dir: Direction, scale: number): Map<string, CardEnds> {
+  const lanes = lanesAt(edges);
+  const handles = new Map<string, string>();
+  for (const e of edges) {
+    handles.set(`${e.source}|o|${keyOf(e)}`, e.sourceHandle!);
+    handles.set(`${e.target}|i|${keyOf(e)}`, e.targetHandle!);
+  }
+  const result = new Map<string, CardEnds>();
+  for (const n of nodes) {
+    if (n.type !== 'machine') continue;
+    const card = cardEnds(n.id, keysOf(n.data as MachineNodeData), lanes, (dir === 'LR' ? n.height : n.width) ?? 0, scale);
+    for (const [side, row] of [
+      ['i', card.in],
+      ['o', card.out],
+    ] as const) {
+      for (const end of row) {
+        const key = `${n.id}|${side}|${end.item ?? POWER}`;
+        end.id = handles.get(key) ?? `${key}:unused`;
+      }
+    }
+    result.set(n.id, card);
+  }
+  return result;
+}
+
+/** The visible item squares and React Flow's pre-measured handles use exactly the same geometry. */
+export function setCardEnds(node: Node, card: CardEnds, dir: Direction, scale: number): void {
+  const ports: Port[] = [];
+  for (const [type, row] of [
+    ['target', card.in],
+    ['source', card.out],
+  ] as const) {
+    for (const end of row)
+      ports.push({ id: end.id, type, offset: end.at * ((dir === 'LR' ? node.height : node.width) ?? 0), size: end.len });
+  }
+  node.data = { ...node.data, ends: card, ports };
+  const down = dir === 'TB';
+  const square = END * scale;
+  const reach = END_REACH * scale;
+  node.handles = [];
+  for (const [type, row] of [
+    ['target', card.in],
+    ['source', card.out],
+  ] as const) {
+    for (const end of row) {
+      const along = end.at * ((down ? node.width : node.height) ?? 0) - end.len / 2;
+      const out = type === 'target' ? -reach : ((down ? node.height : node.width) ?? 0) - END_LAP * scale;
+      node.handles.push({
+        id: end.id,
+        type,
+        position: down ? (type === 'target' ? Position.Top : Position.Bottom) : type === 'target' ? Position.Left : Position.Right,
+        x: down ? along : out,
+        y: down ? out : along,
+        width: down ? end.len : square,
+        height: down ? square : end.len,
+      });
+    }
+  }
+}
 
 /**
  * The node's handles from its ports: inputs on the inflow side, outputs on the outflow side. Spelled out up front,
@@ -270,8 +430,6 @@ export interface BuildOptions {
   consumers?: Consumer[];
   /** A line whose output goes to several places: one card with a note, or a card per place. */
   splitLines?: 'one' | 'each';
-  /** A splitter, merger or pipe junction where a belt feeds several machines or several belts feed one. */
-  splitters?: boolean;
   /**
    * Most a single belt (solids) or pipe (fluids) may carry, per minute. Lines whose flows don't fit are split
    * into groups of whole machines that do, each fed and emptied by its own belts.
@@ -502,7 +660,7 @@ function buildGraphOne(result: SolveResult, tier: number, opts: BuildOptions = {
     for (const [a, b, rate] of pair(list(by.sources), list(by.targets))) if (a !== b) belt(a, b, item, rate);
   }
 
-  if (opts.splitters) addLogistics(nodes, edges, box, tier);
+  addLogistics(nodes, edges, box, tier);
   if (result.grid) addGrid(result, plants, nodes, edges, opts.consumers ?? [], box);
   widenEnds(nodes, edges);
   return { nodes, edges };
@@ -528,7 +686,7 @@ const FAN = 3;
 
 /**
  * A belt that feeds several machines gets a splitter, and several belts into one machine a merger (a junction for
- * pipes), chained three at a time like on the Manual floor, so the floor shows what would be built.
+ * pipes), as a balanced tree of up to three at a time like on the Manual floor, so the floor shows what would be built.
  */
 function addLogistics(nodes: Node[], edges: Edge[], box: (size: Box) => Box, tier: number) {
   let n = 0;
@@ -575,43 +733,57 @@ function addLogistics(nodes: Node[], edges: Edge[], box: (size: Box) => Box, tie
     for (const e of gone) edges.splice(edges.indexOf(e), 1);
   };
 
-  // Splitters: one output going to several places.
+  const total = (list: Edge[]) => list.reduce((sum, e) => sum + rateOf(e), 0);
+  /** How many branches a splitter or merger over n belts has: up to FAN, and the branches as even in size as can be. */
+  const branches = (list: Edge[]): Edge[][] => {
+    const k = list.length <= FAN ? list.length : Math.min(FAN, Math.ceil(list.length / FAN));
+    const base = Math.floor(list.length / k);
+    const extra = list.length % k;
+    const parts: Edge[][] = [];
+    for (let j = 0, at = 0; j < k; j++) {
+      const size = base + (j < extra ? 1 : 0);
+      parts.push(list.slice(at, at + size));
+      at += size;
+    }
+    return parts;
+  };
+  // Splitters: one output going to several places. A balanced tree, as on the Manual floor: no belt waits on a chain of them.
+  const split = (feed: string, list: Edge[], item: string, kind: LogisticNodeData['kind']) => {
+    const id = logistic(kind, item, total(list), false);
+    edges.push(make(feed, id, item, total(list)));
+    for (const part of branches(list)) {
+      if (part.length === 1) edges.push(make(id, part[0].target, item, rateOf(part[0])));
+      else split(id, part, item, kind);
+    }
+  };
   for (const list of group((e) => `${e.source}|${itemOf(e)}`)) {
     const item = itemOf(list[0]);
-    const kind = pipe(item) ? 'junction' : 'splitter';
     drop(list);
-    let feed = list[0].source;
-    let left = [...list].sort((a, b) => rateOf(b) - rateOf(a));
-    while (left.length) {
-      const last = left.length <= FAN;
-      const take = last ? left : left.slice(0, FAN - 1);
-      const through = left.reduce((s, e) => s + rateOf(e), 0);
-      const id = logistic(kind, item, through, false);
-      edges.push(make(feed, id, item, through));
-      for (const e of take) edges.push(make(id, e.target, item, rateOf(e)));
-      left = left.slice(take.length);
-      feed = id;
-    }
+    split(
+      list[0].source,
+      [...list].sort((a, b) => rateOf(b) - rateOf(a)),
+      item,
+      pipe(item) ? 'junction' : 'splitter',
+    );
   }
-  // Mergers: several belts into one input.
+  // Mergers: several belts into one input, the same tree the other way round.
+  const merge = (into: string, list: Edge[], item: string, kind: LogisticNodeData['kind']) => {
+    const id = logistic(kind, item, total(list), true);
+    edges.push(make(id, into, item, total(list)));
+    for (const part of branches(list)) {
+      if (part.length === 1) edges.push(make(part[0].source, id, item, rateOf(part[0])));
+      else merge(id, part, item, kind);
+    }
+  };
   for (const list of group((e) => `${e.target}|${itemOf(e)}`)) {
     const item = itemOf(list[0]);
-    const kind = pipe(item) ? 'junction' : 'merger';
     drop(list);
-    const into = list[0].target;
-    let left = [...list].sort((a, b) => rateOf(b) - rateOf(a));
-    let feed = into;
-    // The first merger is the one next to the machine; each further one feeds the one before it.
-    while (left.length) {
-      const last = left.length <= FAN;
-      const take = last ? left : left.slice(0, FAN - 1);
-      const through = left.reduce((s, e) => s + rateOf(e), 0);
-      const id = logistic(kind, item, through, true);
-      edges.push(make(id, feed, item, through));
-      for (const e of take) edges.push(make(e.source, id, item, rateOf(e)));
-      left = left.slice(take.length);
-      feed = id;
-    }
+    merge(
+      list[0].target,
+      [...list].sort((a, b) => rateOf(b) - rateOf(a)),
+      item,
+      pipe(item) ? 'junction' : 'merger',
+    );
   }
 }
 

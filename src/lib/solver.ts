@@ -431,7 +431,8 @@ function buildModel(input: SolveInput, draw?: Map<string, number>): Model {
   for (const r of recipes) {
     // Tie-breaker keeps the plan from building machines it doesn't need.
     const p = machinePower(r, modOf(r));
-    const cost = input.objective === 'power' ? p : input.objective === 'buildings' ? 1 + 1e-4 * p : 1e-4 * p + 1e-4;
+    const cost =
+      input.objective === 'power' ? p : input.objective === 'buildings' ? 1 + 1e-4 * p + LINE_COST * r.inputs.length : 1e-4 * p + 1e-4;
     costs.push(`${fmt(cost)} ${rv.get(r.id)}`);
   }
 
@@ -678,6 +679,9 @@ function solveWith(solver: Highs, input: SolveInput, draw?: Map<string, number>)
     grid,
   };
 }
+
+/** A machine's input lines weigh this much each in a fewest-buildings plan: of two recipes that need as many machines, the one with fewer belts coming in wins. */
+const LINE_COST = 0.01;
 
 /** Each kind of raw resource a fewest-buildings plan draws on counts as this many buildings. */
 const KIND_COST = 2;

@@ -5,12 +5,12 @@ import { DEFAULT_EXTRACTION } from '../src/lib/extraction';
 import { adaptModel } from '../src/lib/model/calc/adapter';
 import { calcKey, calcModel } from '../src/lib/model/calc';
 import { builtTransport } from '../src/lib/model/calc/compile';
-import { modelFromSolve } from '../src/lib/model/fromAuto';
+import { modelFromSolve } from './helpers/fromAuto';
 import { applyArrangement, arrangeModel, arrangement } from '../src/lib/model/arrange';
 import { openCards, openEnds, ruleFlags } from '../src/lib/model/checks';
 import { choicesFor, choiceWords, placeChoice, wantAt } from '../src/lib/model/choices';
 import { cardSize, endSpot, freeSpot } from '../src/lib/model/layout';
-import { addNode, canConnect, connect, evenSpeed, fullSpeed, minerFor, moveNodes, removeNodes } from '../src/lib/model/ops';
+import { addNode, canConnect, connect, evenSpeed, fullSpeed, minerFor, moveNodes, removeNodes, updateLink } from '../src/lib/model/ops';
 import { mediumOf } from '../src/lib/model/ports';
 import { cleanModel } from '../src/lib/model/sanitize';
 import { type MLink, type MNode, type Model, MODEL_VERSION } from '../src/lib/model/types';
@@ -227,7 +227,7 @@ describe('max flow', () => {
   });
 });
 
-describe('from an Auto plan', () => {
+describe('a hand-built copy of an Auto plan', () => {
   const standard = () => new Set(data.recipes.filter((r) => r.kind === 'standard').map((r) => r.id));
   for (const [item, rate] of [
     ['Desc_Motor_C', 10],
@@ -284,22 +284,6 @@ describe('from an Auto plan', () => {
     expect(cleanModel(m)).toEqual(m);
     const { result } = adaptModel(m, run(m));
     expect(result.targets.find((t) => t.item === 'Desc_Motor_C')?.rate).toBeCloseTo(20, 4);
-  });
-
-  test('machines whose recipe was ticked built on the Auto floor start ticked on the Manual floor', async () => {
-    const auto = solve(highs, {
-      targets: [{ item: 'Desc_Wire_C', rate: 60 }],
-      supplies: [],
-      enabledRecipes: standard(),
-      resourceCaps: {},
-      objective: 'resources',
-    });
-    const ticked = auto.recipes[0].recipe.id;
-    const m = await modelFromSolve(auto, 9, DEFAULT_EXTRACTION, 'LR', [ticked]);
-    for (const n of m.nodes) if (n.k === 'machine') expect(!!n.done).toBe(n.recipe === ticked);
-    expect(m.nodes.some((n) => n.k === 'machine' && n.done)).toBe(true);
-    const plain = await modelFromSolve(auto, 9, DEFAULT_EXTRACTION);
-    expect(plain.nodes.some((n) => n.k === 'machine' && n.done)).toBe(false);
   });
 
   test('a target set lower afterwards takes fewer machines and slower belts, not machines running slower', async () => {
@@ -934,6 +918,62 @@ describe('belt label spots', () => {
   });
 });
 
+describe('a belt routed by hand', () => {
+  const own: Model = {
+    v: MODEL_VERSION,
+    calc: 'basic',
+    seq: 3,
+    nodes: [
+      { id: '1', k: 'in', item: 'Desc_OreIron_C', x: 0, y: 0 },
+      { id: '2', k: 'out', x: 500, y: 0 },
+    ],
+    links: [
+      {
+        id: '3',
+        a: '1',
+        ap: 0,
+        b: '2',
+        bp: 0,
+        own: true,
+        pts: [
+          [200, 80],
+          [300, 80],
+        ],
+        lbl: [250, 80],
+      },
+    ],
+  };
+
+  test('its stops are saved and stay when a card moves, and Tidy up gives the belt back to Automatic', async () => {
+    expect(cleanModel(own)?.links[0]).toMatchObject({
+      own: true,
+      pts: [
+        [200, 80],
+        [300, 80],
+      ],
+    });
+    expect(cleanModel({ ...own, links: [{ ...own.links[0], own: 'yes' }] })?.links[0].own).toBeUndefined();
+    const moved = moveNodes(own, new Map([['2', { x: 600, y: 40 }]]));
+    expect(moved.links[0].own).toBe(true);
+    expect(moved.links[0].pts).toEqual([
+      [200, 80],
+      [300, 80],
+    ]);
+    expect(moved.links[0].lbl).toBeUndefined();
+    // Tidy up lays it all out afresh: the belt is given back to Automatic.
+    const tidy = await arrangeModel(own);
+    expect(tidy.links[0].own).toBeUndefined();
+    expect(tidy.links[0].pts).not.toEqual(own.links[0].pts);
+  });
+
+  test('going back to Automatic drops the stops, and the stops are not part of what is calculated', () => {
+    const auto = updateLink(own, '3', { own: undefined, pts: undefined });
+    expect(auto.links[0].own).toBeUndefined();
+    expect(auto.links[0].pts).toBeUndefined();
+    expect(calcKey(own, 9)).toBe(calcKey(updateLink(own, '3', { pts: [[1, 1]] }), 9));
+  });
+});
+
 test('the build menu finds a splitter, a merger and a pipe junction by what they do, a pipe splitter being a junction', async () => {
   const { choiceWords } = await import('../src/lib/model/choices');
   const junction = { key: 'l:junction', tab: 'logistic', init: { k: 'logistic', kind: 'junction', x: 0, y: 0 }, tier: 0 } as never;
@@ -943,4 +983,101 @@ test('the build menu finds a splitter, a merger and a pipe junction by what they
   expect(words).toContain('pipe');
   const splitter = { key: 'l:splitter', tab: 'logistic', init: { k: 'logistic', kind: 'splitter', x: 0, y: 0 }, tier: 0 } as never;
   expect(choiceWords(splitter).join(' ').toLowerCase()).toContain('splitter');
+});
+
+describe('a hand-built copy with a card for every building', () => {
+  const standard = () => new Set(data.recipes.filter((r) => r.kind === 'standard').map((r) => r.id));
+  const factory = () =>
+    solve(highs, {
+      targets: [{ item: 'Desc_Motor_C', rate: 20 }],
+      supplies: [],
+      enabledRecipes: standard(),
+      resourceCaps: {},
+      objective: 'resources',
+    });
+
+  test('has a card for every machine, with the same output as the card saying how many', async () => {
+    const auto = factory();
+    const kind = await modelFromSolve(auto, 9, DEFAULT_EXTRACTION);
+    const each = await modelFromSolve(auto, 9, DEFAULT_EXTRACTION, 'LR', true);
+    const machines = (m: Model) => m.nodes.filter((n) => n.k === 'machine');
+    expect(machines(each).length).toBeGreaterThanOrEqual(auto.recipes.reduce((a, u) => a + (u.recipe.kind === 'power' ? 0 : u.built), 0));
+    expect(machines(each).length).toBeGreaterThan(machines(kind).length);
+    expect(machines(each).some((n) => n.k === 'machine' && n.auto)).toBe(false);
+    expect(each.nodes.some((n) => n.k === 'logistic')).toBe(true);
+    expect(cleanModel(each)).toEqual(each);
+    const { result } = adaptModel(each, run(each));
+    expect(result.targets.find((t) => t.item === 'Desc_Motor_C')?.rate).toBeCloseTo(20, 4);
+  }, 60000);
+
+  test('shares belts out in trees: no splitter or merger with one belt, none with more than three, and no chains', async () => {
+    const each = await modelFromSolve(factory(), 9, DEFAULT_EXTRACTION, 'TB', true);
+    const logistic = each.nodes.filter((n) => n.k === 'logistic');
+    expect(logistic.length).toBeGreaterThan(0);
+    const into = (id: string) => each.links.filter((l) => l.b === id);
+    const out = (id: string) => each.links.filter((l) => l.a === id);
+    const isLogistic = new Set(logistic.map((n) => n.id));
+    for (const n of logistic) {
+      const [i, o] = [into(n.id).length, out(n.id).length];
+      expect(i === 1 ? o >= 2 && o <= 3 : o === 1 && i >= 2 && i <= 3).toBe(true);
+    }
+    // No chains: a tree of splitters is no deeper than its machines call for (three to a splitter), plus one for the one that shares between lines.
+    const splits = (id: string) => isLogistic.has(id) && into(id).length === 1 && out(id).length >= 2;
+    const depth = (id: string): number => 1 + Math.max(0, ...out(id).map((l) => (splits(l.b) ? depth(l.b) : 0)));
+    const under = (id: string): number => out(id).reduce((n, l) => n + (splits(l.b) ? under(l.b) : 1), 0);
+    let checked = 0;
+    for (const n of logistic) {
+      if (!splits(n.id) || splits(into(n.id)[0].a)) continue;
+      checked++;
+      expect(depth(n.id)).toBeLessThanOrEqual(Math.ceil(Math.log(under(n.id)) / Math.log(3)) + 1);
+    }
+    expect(checked).toBeGreaterThan(10);
+  }, 60000);
+
+  test('lays each line out in one row, each splitter over the machines it feeds and each merger under the ones it takes from', async () => {
+    const each = await modelFromSolve(factory(), 9, DEFAULT_EXTRACTION, 'TB', true);
+    const at = new Map(each.nodes.map((n) => [n.id, n]));
+    const centre = (id: string) => {
+      const n = at.get(id)!;
+      return n.x + cardSize(n, 'TB').w / 2;
+    };
+    let seen = 0;
+    for (const n of each.nodes) {
+      if (n.k !== 'logistic') continue;
+      const outs = each.links.filter((l) => l.a === n.id).map((l) => at.get(l.b)!);
+      const ins = each.links.filter((l) => l.b === n.id).map((l) => at.get(l.a)!);
+      const [side, ends] = outs.length >= 2 ? ['out', outs] : [undefined, ins];
+      if (!ends.length || ends.some((e) => e.k !== 'machine')) continue;
+      seen++;
+      // Machines of one splitter stand in a row.
+      expect(new Set(ends.map((e) => e.y)).size).toBe(1);
+      const xs = ends.map((e) => centre(e.id));
+      expect(centre(n.id)).toBeGreaterThanOrEqual(Math.min(...xs) - 1);
+      expect(centre(n.id)).toBeLessThanOrEqual(Math.max(...xs) + 1);
+      expect(side === 'out' ? n.y < ends[0].y : n.y > ends[0].y).toBe(true);
+    }
+    expect(seen).toBeGreaterThan(4);
+  }, 60000);
+  test('a line of machines stands in the order their belts lead on, so a splitter below them has none crossing', async () => {
+    const mk = (id: string, recipe: string): MNode => ({ id, x: 0, y: 0, k: 'machine', recipe });
+    const nodes: MNode[] = [
+      { id: 's', x: 0, y: 0, k: 'logistic', kind: 'splitter' },
+      mk('r1', 'Recipe_IronRod_C'),
+      mk('r2', 'Recipe_IronRod_C'),
+      mk('screws', 'Recipe_Screw_C'),
+      mk('rotor', 'Recipe_Rotor_C'),
+    ];
+    // The first rod machine feeds the screws, which go into the rotor's second input; the second feeds the rotor's first.
+    const link = (id: string, a: string, ap: number, b: string, bp: number): MLink => ({ id, a, ap, b, bp });
+    const links = [
+      link('0', 's', 0, 'r1', 0),
+      link('1', 's', 1, 'r2', 0),
+      link('2', 'r1', 0, 'screws', 0),
+      link('3', 'r2', 0, 'rotor', 0),
+      link('4', 'screws', 0, 'rotor', 1),
+    ];
+    const laid = await arrangeModel({ v: MODEL_VERSION, calc: 'basic', nodes, links, seq: 9, dir: 'TB' });
+    const x = (id: string) => laid.nodes.find((n) => n.id === id)!.x;
+    expect(x('r2')).toBeLessThan(x('r1'));
+  }, 60000);
 });

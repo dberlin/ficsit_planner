@@ -1,14 +1,15 @@
-import { data, recipeById, whyMissing } from '../lib/data';
+import { data, recipeById, wasteOf, whyMissing } from '../lib/data';
+import { milestoneById } from '../lib/unlocks';
 import { useT } from '../lib/i18n';
 import type { Target } from '../lib/solver';
 import { recipeLabel } from '../lib/text';
-import { activePowerPlan, usePlan, useStore } from '../store';
+import { activePowerPlan, usePlan, useStore, useTier } from '../store';
 import { Icon } from './Icon';
 
 /** Each item the plan can't make, why, and the fix: switch tier, turn its recipe on, or bring it in. */
 export function MissingList({ missing }: { missing: Target[] }) {
   const { t, name, num } = useT();
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   const set = useStore((s) => s.set);
   const addSupply = useStore((s) => s.addSupply);
   const updatePower = useStore((s) => s.updatePower);
@@ -16,6 +17,7 @@ export function MissingList({ missing }: { missing: Target[] }) {
   const have = useStore((s) => (s.mode === 'power' && activePowerPlan(s).sizeBy === 'have' ? activePowerPlan(s).have : undefined));
   const bringIn = (item: string, rate: number) =>
     have ? updatePower({ have: have.some((h) => h.item === item) ? have : [...have, { item, rate }] }) : addSupply(item, rate);
+  const markSkipped = useStore((s) => s.markSkipped);
   const toggleRecipe = useStore((s) => s.toggleRecipe);
   const enabled = new Set(usePlan().enabled);
 
@@ -23,19 +25,26 @@ export function MissingList({ missing }: { missing: Target[] }) {
     <ul className="missing-list">
       {missing.map((m) => {
         const why = whyMissing(m.item, tier, enabled);
+        const milestone = why.kind === 'milestone' ? milestoneById.get(why.id) : undefined;
         const recipe = why.kind === 'off' ? recipeById.get(why.recipe) : undefined;
         return (
           <li key={m.item}>
             <Icon id={m.item} size={32} />
             <span className="missing-text">
               <b>{name(data.items[m.item])}</b> {why.kind === 'tier' && t('missingTier', { tier: why.tier, current: tier })}
+              {milestone && t('missingMilestone', { name: milestone.name })}
               {why.kind === 'off' && t('missingOff', { recipe: recipe ? recipeLabel(name(recipe), recipe.kind) : '?' })}
-              {why.kind === 'none' && t('missingNone')}
+              {why.kind === 'none' && (wasteOf(m.item) ? t('missingWaste', { name: name(wasteOf(m.item)) }) : t('missingNone'))}
             </span>
             <span className="missing-fixes">
               {why.kind === 'tier' && (
                 <button type="button" className="chip fix" onClick={() => set({ tier: why.tier })}>
                   {t('switchTier', { tier: why.tier })}
+                </button>
+              )}
+              {milestone && (
+                <button type="button" className="chip fix" onClick={() => markSkipped([milestone.id], false)}>
+                  {t('markBought', { name: milestone.name })}
                 </button>
               )}
               {why.kind === 'off' && (

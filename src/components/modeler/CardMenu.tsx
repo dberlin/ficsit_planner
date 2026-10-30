@@ -1,11 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import { useT } from '../../lib/i18n';
+import { Glyph, type GlyphName } from '../Glyph';
 
 export interface CardMenuItem {
   label: string;
   /** Its keyboard shortcut, shown on the right. */
   keys?: string;
   danger?: boolean;
+  /** A small drawing before the label. */
+  icon?: GlyphName;
+  /** Something other than a glyph in front of the label. */
+  lead?: ReactNode;
   /** A line under the label that says what picking it does. */
   note?: string;
   /** Marks a pick that sends something to the AWESOME Sink. */
@@ -51,6 +56,13 @@ export function CardMenu({
       className="card-menu"
       role="menu"
       aria-label={t('cardMenu')}
+      onKeyDown={(e) => {
+        // The floor's own key handling would swallow this before it reaches the window.
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
       style={{ left: at.x, top: at.y, ...(fixed ? { position: 'fixed', zIndex: 60 } : {}) }}
     >
       {items.map((it) => (
@@ -64,9 +76,13 @@ export function CardMenu({
             it.onPick();
           }}
         >
-          <span>
-            {it.label}
-            {it.note && <small className="menu-note">{it.note}</small>}
+          <span className="menu-main">
+            {it.lead}
+            {it.icon && <Glyph name={it.icon} size={20} />}
+            <span>
+              {it.label}
+              {it.note && <small className="menu-note">{it.note}</small>}
+            </span>
           </span>
           {it.keys && <kbd>{it.keys}</kbd>}
         </button>

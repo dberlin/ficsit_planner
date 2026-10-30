@@ -1,9 +1,9 @@
 import { beforeAll, expect, test } from 'bun:test';
 import type { Edge, Node } from '@xyflow/react';
 import loadHighs, { type Highs } from 'highs';
-import { data } from '../src/lib/data';
+import { data, transportFor } from '../src/lib/data';
 import { testEngine } from './elkEngine';
-import { buildGraph, type FlowEdgeData, type Port } from '../src/lib/graph';
+import { buildGraph, type EndpointNodeData, type FlowEdgeData, type Port } from '../src/lib/graph';
 import { type Engine, type Floor, fewestCrossings, gridLayout, layoutGraph, routesOf } from '../src/lib/layout';
 import { latestOnly } from '../src/lib/layoutClient';
 import { countCrossings, edgePath } from '../src/lib/routes';
@@ -44,7 +44,14 @@ function expectRoutesOnHandles(floor: Floor) {
   const byId = new Map(floor.nodes.map((n) => [n.id, n]));
   const at = (n: Node, handle: string) => {
     const h = n.handles!.find((x) => x.id === handle)!;
-    return { x: n.position.x + h.x + h.width / 2, y: n.position.y + h.y + h.height / 2 };
+    const x = n.position.x + h.x + h.width / 2;
+    const y = n.position.y + h.y + h.height / 2;
+    const reach = h.type === 'source' ? 1 : -1;
+    return n.type !== 'machine'
+      ? { x, y }
+      : floor.dir === 'LR'
+        ? { x: x + (reach * h.width) / 2, y }
+        : { x, y: y + (reach * h.height) / 2 };
   };
   for (const e of floor.edges) {
     const route = (e.data as FlowEdgeData).route!;
@@ -56,14 +63,14 @@ function expectRoutesOnHandles(floor: Floor) {
     const out = at(src, e.sourceHandle!);
     const into = at(dst, e.targetHandle!);
     if (floor.dir === 'LR') {
-      expect(Math.abs(start.x - (src.position.x + src.width!))).toBeLessThan(1.5);
+      expect(Math.abs(start.x - out.x)).toBeLessThan(1.5);
       expect(Math.abs(start.y - out.y)).toBeLessThan(1.5);
-      expect(Math.abs(end.x - dst.position.x)).toBeLessThan(1.5);
+      expect(Math.abs(end.x - into.x)).toBeLessThan(1.5);
       expect(Math.abs(end.y - into.y)).toBeLessThan(1.5);
     } else {
-      expect(Math.abs(start.y - (src.position.y + src.height!))).toBeLessThan(1.5);
+      expect(Math.abs(start.y - out.y)).toBeLessThan(1.5);
       expect(Math.abs(start.x - out.x)).toBeLessThan(1.5);
-      expect(Math.abs(end.y - dst.position.y)).toBeLessThan(1.5);
+      expect(Math.abs(end.y - into.y)).toBeLessThan(1.5);
       expect(Math.abs(end.x - into.x)).toBeLessThan(1.5);
     }
   }
@@ -87,21 +94,12 @@ test('top to bottom: the same, and every belt runs downwards overall', async () 
 test('each card has one port per belt end, inputs and outputs on their own sides', async () => {
   const floor = await layoutGraph(frames(), { dir: 'LR', effort: 'fast' }, testEngine);
   for (const n of floor.nodes) {
-    const ports = (n.data as { ports?: Port[] }).ports ?? [];
+    const ports = n.handles ?? [];
     const ins = floor.edges.filter((e) => e.target === n.id).map((e) => e.targetHandle!);
     const outs = floor.edges.filter((e) => e.source === n.id).map((e) => e.sourceHandle!);
-    expect(
-      ports
-        .filter((p) => p.type === 'target')
-        .map((p) => p.id)
-        .sort(),
-    ).toEqual(ins.sort());
-    expect(
-      ports
-        .filter((p) => p.type === 'source')
-        .map((p) => p.id)
-        .sort(),
-    ).toEqual(outs.sort());
+    for (const id of ins) expect(ports.some((p) => p.id === id && p.type === 'target')).toBe(true);
+    for (const id of outs) expect(ports.some((p) => p.id === id && p.type === 'source')).toBe(true);
+    expect(new Set([...ins, ...outs]).size).toBe(ins.length + outs.length);
     for (const h of n.handles!) expect(h.position).toBe(h.type === 'target' ? 'left' : 'right');
   }
 });
@@ -139,7 +137,7 @@ test('laying out leaves the built graph alone, so it can be laid out again', asy
 });
 
 test('single node, no edges: a plan with no belts still lays out', async () => {
-  const lone: Node = { id: 'only', type: 'machine', position: { x: 0, y: 0 }, width: 310, height: 130, data: {} };
+  const lone = buildGraph(plan([{ item: 'Desc_IronPlate_C', rate: 20 }]), 9).nodes.find((n) => n.type === 'machine')!;
   const floor = await layoutGraph({ nodes: [lone], edges: [] as Edge[] }, { effort: 'fast' }, testEngine);
   expect(floor.nodes).toHaveLength(1);
   expect(Number.isFinite(floor.nodes[0].position.x)).toBe(true);
@@ -204,10 +202,30 @@ test('every belt label sits in the gap between the machines it joins, with room 
 });
 
 test('a very big floor is laid out once per direction, whatever the effort', async () => {
-  const chain = Array.from({ length: 250 }, (_, i): Node => ({ id: `n${i}`, position: { x: 0, y: 0 }, width: 100, height: 60, data: {} }));
-  const links = chain
-    .slice(1)
-    .map((n, i): Edge => ({ id: `e${i}`, source: `n${i}`, target: n.id, sourceHandle: `e${i}:out`, targetHandle: `e${i}:in` }));
+  const item = 'Desc_IronPlate_C';
+  const flow: FlowEdgeData = { item, rate: 30, ...transportFor(data.items[item], 30, 9) };
+  const chain = Array.from(
+    { length: 250 },
+    (_, i): Node => ({
+      id: `n${i}`,
+      type: 'endpoint',
+      position: { x: 0, y: 0 },
+      width: 100,
+      height: 60,
+      data: { kind: 'supply', item, rate: 30 } satisfies EndpointNodeData,
+    }),
+  );
+  const links = chain.slice(1).map(
+    (n, i): Edge => ({
+      id: `e${i}`,
+      source: `n${i}`,
+      target: n.id,
+      sourceHandle: `e${i}:out`,
+      targetHandle: `e${i}:in`,
+      type: 'flow',
+      data: { ...flow },
+    }),
+  );
   let runs = 0;
   const counted: Engine = (g) => {
     runs++;
@@ -233,9 +251,11 @@ test('a card with many belts on one side grows so its belts stay apart', async (
         for (const o of offsets) expect(o).toBeLessThanOrEqual(side);
       }
     }
-    // The ore card feeding 20 smelter groups is the one that has to grow, and says so for the stylesheet.
+    // The ore feeds one balanced splitter tree, not twenty overlapping handles on the ore card.
     const ore = floor.nodes.find((n) => n.id === 'raw:Desc_OreIron_C')!;
-    expect((ore.data as { side?: number }).side).toBe(dir === 'LR' ? ore.height : ore.width);
+    const oreData = ore.data as EndpointNodeData;
+    expect(oreData.ports).toHaveLength(1);
+    expect(floor.nodes.some((n) => n.type === 'logistic')).toBe(true);
   }
 });
 

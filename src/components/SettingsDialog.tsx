@@ -16,7 +16,9 @@ import {
   type Settings,
   sameSettings,
 } from '../lib/settings';
-import { exportAll, importFile, wipeLocal } from '../lib/backup';
+import { type Backup, listBackups } from '../lib/autobackup';
+import { applyProgress, exportAll, importData, importFile, type ImportResult, type Progress, wipeLocal } from '../lib/backup';
+import { offAt } from '../lib/unlocks';
 import meta from '../data/meta.json';
 import { UpdateAsk } from './PollCard';
 import { setPollsOn, usePollsOn } from '../lib/polls';
@@ -26,8 +28,9 @@ import { RateInput } from './RateInput';
 import { Dialog } from './Dialog';
 import { Glyph, type GlyphName } from './Glyph';
 import { Preview, SpotContext, type Spot } from './SettingsPreview';
+import { SaveSection } from './SaveSection';
 
-type Section = 'layout' | 'floor' | 'colors' | 'interface' | 'game' | 'data' | 'help' | 'updates';
+type Section = 'layout' | 'floor' | 'colors' | 'interface' | 'game' | 'data' | 'save' | 'help' | 'updates';
 
 const SECTIONS: { id: Section; glyph: GlyphName }[] = [
   { id: 'layout', glyph: 'layout' },
@@ -36,6 +39,7 @@ const SECTIONS: { id: Section; glyph: GlyphName }[] = [
   { id: 'interface', glyph: 'sliders' },
   { id: 'game', glyph: 'factory' },
   { id: 'data', glyph: 'database' },
+  { id: 'save', glyph: 'import' },
   { id: 'help', glyph: 'help' },
   { id: 'updates', glyph: 'news' },
 ];
@@ -56,7 +60,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const { t } = useT();
   const unseen = useStore((s) => s.seenUpdates !== LATEST_UPDATE);
   // Opened from the dot on the gear: straight to what's new.
-  const [section, setSection] = useState<Section>(unseen ? 'updates' : 'layout');
+  const [section, setSection] = useState<Section>(() => useStore.getState().settingsAt ?? (unseen ? 'updates' : 'layout'));
   // On a phone the sections scroll sideways; bring the one it opened on into view.
   const nav = useRef<HTMLElement>(null);
   // In braces: newer browsers return a promise from scrolling, and an effect may only return its clean-up.
@@ -102,6 +106,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     interface: t('setInterface'),
     game: t('setGame'),
     data: t('setData'),
+    save: t('saveMenu'),
     help: t('setHelp'),
     updates: t('setUpdates'),
   };
@@ -148,6 +153,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 {section === 'interface' && <InterfaceSection />}
                 {section === 'game' && <GameSection />}
                 {section === 'data' && <DataSection />}
+                {section === 'save' && <SaveSection />}
                 {section === 'help' && <HelpSection />}
                 {section === 'updates' && <UpdatesSection />}
               </div>
@@ -213,7 +219,7 @@ function Row({
 }: {
   label: string;
   hint?: string;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   onReset?: (() => void) | null;
   spot?: Spot;
 }) {
@@ -457,9 +463,6 @@ function FloorSection() {
           onChange={(v) => set({ autoBelts: v })}
         />
       </Row>
-      <Row label={t('autoSplitters')} hint={t('autoSplittersHint')} spot="splitters">
-        <Toggle label={t('autoSplitters')} on={s.autoSplitters} onChange={(v) => set({ autoSplitters: v })} />
-      </Row>
       <Row label={t('clockSpread')} hint={t('clockSpreadHint')}>
         <Choice
           label={t('clockSpread')}
@@ -481,6 +484,18 @@ function FloorSection() {
             { id: 'never', label: t('never') },
           ]}
           onChange={(v) => set({ beltLabels: v })}
+        />
+      </Row>
+      <Row label={t('areaLabels')} hint={t('areaLabelsHint')}>
+        <Choice
+          label={t('areaLabels')}
+          value={s.areaLabels}
+          options={[
+            { id: 'auto', label: t('auto') },
+            { id: 'always', label: t('always') },
+            { id: 'never', label: t('never') },
+          ]}
+          onChange={(v) => set({ areaLabels: v })}
         />
       </Row>
       <Row label={t('beltMotion')} hint={t('beltMotionHint')} spot="motion">
@@ -863,12 +878,38 @@ function InterfaceSection() {
   );
 }
 
+/** "Tier 5 · 2 off · 3 alternates unlocked": what a file's progress would set. */
+const progressWords = (p: Progress, t: ReturnType<typeof useT>['t']) =>
+  [
+    `${t('tier')} ${p.tier}`,
+    offAt(p.tier, p.skipped) > 0 ? t('tierOff', { n: offAt(p.tier, p.skipped) }) : '',
+    p.unlocked.length > 0 ? t('progressAlts', { n: p.unlocked.length }) : '',
+    p.standardOff?.length ? t('progressStdOff', { n: p.standardOff.length }) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
 function DataSection() {
   const { t } = useT();
   const { settings, set, dir, setDir } = useContext(Draft)!;
   const file = useRef<HTMLInputElement>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string }>();
   const [wipe, setWipe] = useState(false);
+  const [copies, setCopies] = useState<Backup[]>([]);
+  useEffect(() => {
+    void listBackups().then(setCopies);
+  }, []);
+  const [progress, setProgress] = useState<Progress>();
+  const report = (r: ImportResult) => {
+    setProgress(r.ok ? r.progress : undefined);
+    if (!r.ok) return setNote({ ok: false, text: t('importFailed') });
+    // The settings came in already saved: the draft takes them, or Save would put the old ones back.
+    if (r.settings === 'loaded') set(useStore.getState().settings);
+    const added = r.count === 0 ? t('importedNone') : r.count === 1 ? t('importedOne') : t('imported', { count: r.count });
+    const plants = r.power === 0 ? '' : r.power === 1 ? t('importedPlant') : t('importedPlants', { count: r.power });
+    const settings = r.settings === 'loaded' ? t('importedSettings') : r.settings === 'kept' ? t('importSettingsKept') : '';
+    setNote({ ok: true, text: [added, plants, settings].filter(Boolean).join(' ') });
+  };
 
   return (
     <>
@@ -888,12 +929,7 @@ function DataSection() {
             const f = e.target.files?.[0];
             e.target.value = '';
             if (!f) return;
-            const r = await importFile(f);
-            if (!r.ok) return setNote({ ok: false, text: t('importFailed') });
-            const added = r.count === 0 ? t('importedNone') : r.count === 1 ? t('importedOne') : t('imported', { count: r.count });
-            const plants = r.power === 0 ? '' : r.power === 1 ? t('importedPlant') : t('importedPlants', { count: r.power });
-            const settings = r.settings === 'loaded' ? t('importedSettings') : r.settings === 'kept' ? t('importSettingsKept') : '';
-            setNote({ ok: true, text: [added, plants, settings].filter(Boolean).join(' ') });
+            report(await importFile(f));
           }}
         />
         <button type="button" className="ghost-button" onClick={() => file.current?.click()}>
@@ -905,6 +941,38 @@ function DataSection() {
         <p className={`setting-note ${note.ok ? 'ok' : 'bad'}`} role="status">
           {note.text}
         </p>
+      )}
+      {progress && (
+        <p className="setting-note ok progress-offer" role="status">
+          {t('progressIn', { what: progressWords(progress, t) })}{' '}
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => {
+              applyProgress(progress);
+              setProgress(undefined);
+              setNote({ ok: true, text: t('progressUsed') });
+            }}
+          >
+            {t('progressUse')}
+          </button>
+        </p>
+      )}
+      {copies.length > 0 && (
+        <>
+          <Row label={t('autoBackups')} hint={t('autoBackupsHint')} />
+          {copies.map((c) => (
+            <Row
+              key={c.at}
+              label={`${new Date(c.at).toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' })} · ${c.factories === 1 ? t('oneFactory') : t('nFactories', { count: c.factories })}`}
+            >
+              <button type="button" className="ghost-button" onClick={() => report(importData(c.file))}>
+                <Glyph name="upload" size={18} />
+                {t('restore')}
+              </button>
+            </Row>
+          ))}
+        </>
       )}
       <Row label={t('resetSettings')} hint={t('resetSettingsHint')}>
         <button
@@ -927,8 +995,7 @@ function DataSection() {
           onBlur={() => setWipe(false)}
           onClick={() => {
             if (!wipe) return setWipe(true);
-            wipeLocal();
-            location.reload();
+            void wipeLocal().then(() => location.reload());
           }}
         >
           <Glyph name="trash" size={18} />

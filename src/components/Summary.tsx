@@ -1,3 +1,4 @@
+import { skipKey } from '../lib/unlocks';
 import { useMemo } from 'react';
 import { data, recipeById, sinkPerMin } from '../lib/data';
 import { fold } from '../lib/fold';
@@ -8,20 +9,21 @@ import { splitOf } from '../lib/split';
 import { factoryPower } from '../lib/solution';
 import type { SolveResult } from '../lib/solver';
 import { recipeLabel } from '../lib/text';
-import { keepScaled, usePlan, useStore } from '../store';
+import { keepScaled, usePlan, useStore, useTier } from '../store';
 import { Glyph } from './Glyph';
 import { Icon } from './Icon';
 import { MissingList } from './MissingList';
 import { RateInput } from './RateInput';
 
 /** Items and their amounts as icon-and-number pairs: a count badge on a small slot runs into the next one. */
-export function RateChips({ list, muted }: { list: { item: string; rate: number }[]; muted?: boolean }) {
+export function RateChips({ list, muted, named }: { list: { item: string; rate: number }[]; muted?: boolean; named?: boolean }) {
   const { t, name, num } = useT();
   return (
     <span className={`rate-chips ${muted ? 'muted' : ''}`}>
       {list.map((r) => (
         <span key={r.item} className="rate-chip" title={name(data.items[r.item])}>
           <Icon id={r.item} size={30} />
+          {named && <span className="rate-name">{name(data.items[r.item])}</span>}
           <b>{num(r.rate)}</b>
           <small>{t('perMin')}</small>
         </span>
@@ -40,16 +42,18 @@ export function SinkPoints({ list }: { list: { item: string; rate: number }[] })
 export function Summary({ result, extraction }: { result: SolveResult; extraction: ExtractionUse[] }) {
   const { t, num, name } = useT();
   const inventory = useStore((s) => s.inventory);
-  const updatePlan = useStore((s) => s.updatePlan);
   const closed = useStore((s) => s.summaryClosed);
   const set = useStore((s) => s.set);
   const fixed = usePlan().fixed;
-  const pinned = Object.keys(fixed).length > 0;
+  // A hand-built floor works out what it takes from its own cards: there are no pins to set on it.
+  const hand = 'manual' in result;
+  const pinned = !hand && Object.keys(fixed).length > 0;
   // With a card per destination on the floor, the totals count those cards' machines.
-  const tier = useStore((s) => s.tier);
+  const tier = useTier();
   // A hand-built floor's nodes are already the machines on the floor.
   const each = useStore((s) => s.settings.splitLines) === 'each';
-  const split = useMemo(() => splitOf(result, tier, each), [each, result, tier]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: skipKey() changes when the milestones bought do
+  const split = useMemo(() => splitOf(result, tier, each), [each, result, tier, skipKey()]);
   const extractors = extraction.reduce((s, u) => s + u.built, 0);
   const { machines: machinePower, extractors: extractionPower, count: machines } = factoryPower(result, extraction, split);
   // Shards in machines and in overclocked miners and pumps.
@@ -81,7 +85,8 @@ export function Summary({ result, extraction }: { result: SolveResult; extractio
         </button>
       ) : null}
       {!closed && (
-        <div className="readouts">
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling area has to be reachable by keyboard
+        <div className="readouts" tabIndex={0}>
           <div className="readout power">
             <span className="readout-label">{t('power')}</span>
             <span className="readout-value">
@@ -118,12 +123,12 @@ export function Summary({ result, extraction }: { result: SolveResult; extractio
           {/* Many raw inputs take a line of their own under the other readouts, never one tall column. */}
           <div className="readout wide" data-many={result.raw.length > 4 || undefined}>
             <span className="readout-label">{t('rawInput')}</span>
-            <RawInputs raw={result.raw} />
+            {hand ? <RateChips list={result.raw} /> : <RawInputs raw={result.raw} targets={result.targets} />}
           </div>
           {result.surplus.length > 0 && (
             <div className="readout fill">
               <span className="readout-label">{t('surplus')}</span>
-              <RateChips list={result.surplus} muted />
+              <RateChips list={result.surplus} muted named />
               <SinkPoints list={result.surplus} />
             </div>
           )}
@@ -143,12 +148,6 @@ export function Summary({ result, extraction }: { result: SolveResult; extractio
               </span>
             ))}
           </span>
-          <button type="button" className="text-button" title={t('makeDefaultHint')} onClick={() => updatePlan(keepScaled(result.targets))}>
-            {t('makeDefault')}
-          </button>
-          <button type="button" className="text-button" onClick={() => updatePlan({ fixed: {} })}>
-            {t('unpinAll')}
-          </button>
           {!!result.heldByPins?.length && (
             <span className="pin-held">
               {t('pinHeld')}
@@ -179,10 +178,11 @@ export function Summary({ result, extraction }: { result: SolveResult; extractio
  * Raw inputs you can retype or step right here, not only on the graph. Changing one pins it: the
  * factory is built around that amount and the targets scale to fit.
  */
-function RawInputs({ raw }: { raw: SolveResult['raw'] }) {
+function RawInputs({ raw, targets }: { raw: SolveResult['raw']; targets: SolveResult['targets'] }) {
   const { t, name } = useT();
   const fixed = usePlan().fixed;
   const setFixed = useStore((s) => s.setFixed);
+  const updatePlan = useStore((s) => s.updatePlan);
   return (
     <span className="raw-inputs">
       {raw.map((r) => {
@@ -210,6 +210,16 @@ function RawInputs({ raw }: { raw: SolveResult['raw'] }) {
           </span>
         );
       })}
+      {Object.keys(fixed).length > 0 && (
+        <span className="raw-pin-actions">
+          <button type="button" className="text-button" title={t('makeDefaultHint')} onClick={() => updatePlan(keepScaled(targets))}>
+            {t('makeDefault')}
+          </button>
+          <button type="button" className="text-button" onClick={() => updatePlan({ fixed: {} })}>
+            {t('unpinAll')}
+          </button>
+        </span>
+      )}
     </span>
   );
 }

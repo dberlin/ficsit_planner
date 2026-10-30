@@ -1,8 +1,10 @@
+import { SaveSheetRow } from './SaveButton';
 import { useEffect, useRef } from 'react';
 import { useT } from '../lib/i18n';
+import { offAt } from '../lib/unlocks';
 import { activePowerPlan, usePlan, useStore } from '../store';
 import { Glyph } from './Glyph';
-import { PlanActions, ShareButton } from './PlanTabs';
+import { PlanActions } from './PlanTabs';
 import { InstallButton } from './PwaStatus';
 import { LATEST_UPDATE } from '../locales/updates.en';
 
@@ -62,9 +64,10 @@ export function MobileNav() {
 }
 
 /** Phone sheet holding what the desktop top bar shows inline: tier, install, factory actions, settings, feedback. */
-export function MobileMenu({ onClose, onTier }: { onClose: () => void; onTier: () => void }) {
+export function MobileMenu({ onClose, onTier, onCalc }: { onClose: () => void; onTier: () => void; onCalc: () => void }) {
   const { t } = useT();
   const tier = useStore((s) => s.tier);
+  const tierOff = useStore((s) => offAt(s.tier, s.skipped));
   const set = useStore((s) => s.set);
   const power = useStore((s) => s.mode === 'power');
   const newUpdates = useStore((s) => s.onboarded && s.seenUpdates !== LATEST_UPDATE);
@@ -105,12 +108,13 @@ export function MobileMenu({ onClose, onTier }: { onClose: () => void; onTier: (
             }}
           >
             {t('tier')} <b>{tier}</b>
+            {tierOff > 0 && <span className="tier-off"> · {t('tierOff', { n: tierOff })}</span>}
           </button>
         </div>
+        <SaveSheetRow onDone={onClose} />
         {!codex && (
           <div className="sheet-group">
             <span className="control-label">{power ? t('plantName') : t('planName')}</span>
-            <ShareButton className="ghost-button" onDone={onClose} />
             <div className="sheet-actions">
               <PlanActions onDone={onClose} />
             </div>
@@ -125,6 +129,17 @@ export function MobileMenu({ onClose, onTier }: { onClose: () => void; onTier: (
           <button type="button" className="ghost-button" onClick={() => open('report')}>
             <Glyph name="flag" size={18} />
             {t('feedback')}
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              onClose();
+              onCalc();
+            }}
+          >
+            <Glyph name="calculator" size={18} />
+            {t('calculator')}
           </button>
         </div>
         <InstallButton className="primary-button" />

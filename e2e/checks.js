@@ -60,7 +60,14 @@ export function inspectPage(opts) {
 
   // 1. The page wider than the window: the whole app slides sideways on a phone.
   const se = document.scrollingElement;
-  if (se.scrollWidth > W + 1) add('page-wider-than-window', null, `${se.scrollWidth}px on a ${W}px window`);
+  if (se.scrollWidth > W + 1) {
+    // Name what sticks out, so a rare overflow can be found from the report alone.
+    const past = visible
+      .filter((el) => el.getBoundingClientRect().right > W + 1)
+      .slice(0, 3)
+      .map((el) => `${describe(el)} to ${Math.round(el.getBoundingClientRect().right)}`);
+    add('page-wider-than-window', null, `${se.scrollWidth}px on a ${W}px window${past.length ? `, past it: ${past.join('; ')}` : ''}`);
+  }
 
   // Nearest ancestor that clips (hidden) or scrolls (auto/scroll).
   const clipper = (el) => {
@@ -211,7 +218,10 @@ export function inspectPage(opts) {
   }
 
   // 7. Machine and item cards on the floor lying on top of each other, or a belt label on a card.
-  const nodes = [...document.querySelectorAll('.react-flow__node')].filter(shown).map((el) => ({ el, r: el.getBoundingClientRect() }));
+  // An area lies behind the cards on purpose.
+  const nodes = [...document.querySelectorAll('.react-flow__node:not(.react-flow__node-area)')]
+    .filter(shown)
+    .map((el) => ({ el, r: el.getBoundingClientRect() }));
   for (let i = 0; i < nodes.length; i++)
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i].r;
@@ -271,7 +281,9 @@ export function inspectPage(opts) {
       if (!shown(el) || inCanvas(el)) continue;
       // A box inside its label is hit through the label; a slider through its thumb; a link inside a sentence is
       // part of the text around it.
+      // (A fold head in a wide panel is only a title, with pointer events off.)
       if (el.closest('label') || el.type === 'range' || (el.tagName === 'A' && el.closest('p'))) continue;
+      if (getComputedStyle(el).pointerEvents === 'none') continue;
       const r = el.getBoundingClientRect();
       if (r.width < 28 || r.height < 28)
         add(

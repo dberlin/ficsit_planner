@@ -20,6 +20,7 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 - **Dragging a machine** no longer turns its belts into curves: they follow the Belt shape setting (square, curved or
   straight).
 - **Milestone changes during a background solve** no longer cache the answer with a miner unlocked under a different milestone selection.
+- **Wide belts at machine ends** keep their full turn radius after endpoint clamping, so the outer lanes do not fold into sharp corners.
 
 ### Changed
 

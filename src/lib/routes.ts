@@ -13,7 +13,7 @@ export type EdgeRouting = 'ORTHOGONAL' | 'SPLINES' | 'POLYLINE';
 
 const xy = (p: Point) => `${p.x},${p.y}`;
 
-/** Straight runs, with each bend rounded off by up to `radius` (never more than half either run). */
+/** Straight runs with rounded bends; interior runs share their length between two turns. */
 function rounded(points: Point[], radius: number): string {
   let d = `M${xy(points[0])}`;
   for (let i = 1; i < points.length - 1; i++) {
@@ -37,7 +37,7 @@ function rounded(points: Point[], radius: number): string {
       i++;
       continue;
     }
-    const r = Math.min(radius, la / 2, lb / 2);
+    const r = Math.min(radius, la / (i === 1 ? 1 : 2), lb / (i === points.length - 2 ? 1 : 2));
     if (r < 0.5) {
       d += ` L${xy(p)}`;
       continue;
@@ -115,8 +115,7 @@ export function handlePath(
     const [x, y] = longestRunMid(runs);
     return [path, x, y, { at, dir: INTO[targetPosition] }];
   }
-  const [path, x, y] =
-    routing === 'ORTHOGONAL' ? getSmoothStepPath({ ...e, borderRadius: radius }) : getBezierPath(e);
+  const [path, x, y] = routing === 'ORTHOGONAL' ? getSmoothStepPath({ ...e, borderRadius: radius }) : getBezierPath(e);
   return [path, x, y, { at, dir: INTO[targetPosition] }];
 }
 

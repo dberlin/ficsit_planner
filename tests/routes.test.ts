@@ -9,10 +9,9 @@ test('polyline routes are straight segments', () => {
   expect(routeSvgPath([p(0, 0), p(10, 0), p(10, 10)], 'POLYLINE')).toBe('M0,0 L10,0 L10,10');
 });
 
-test('orthogonal routes round their corners, never more than half the shorter run', () => {
-  // Runs of 100 and 8: the corner radius is capped at 4, not the usual 12.
-  expect(routeSvgPath([p(0, 0), p(100, 0), p(100, 8)], 'ORTHOGONAL')).toBe('M0,0 L96,0 Q100,0 100,4 L100,8');
-  expect(routeSvgPath([p(0, 0), p(100, 0), p(100, 100)], 'ORTHOGONAL')).toBe('M0,0 L88,0 Q100,0 100,12 L100,100');
+test('orthogonal corners share an interior run without overlapping', () => {
+  // The two corners share the short run of 8: each can consume at most 4.
+  expect(routeSvgPath([p(0, 0), p(100, 0), p(100, 8), p(200, 8)], 'ORTHOGONAL')).toBe('M0,0 L96,0 Q100,0 100,4 L100,4 Q100,8 104,8 L200,8');
 });
 
 test('spline routes are chains of cubic curves through ELK control points', () => {
@@ -68,7 +67,9 @@ test('active ELK belts take lane-wide turns and ease a small across-flow step wi
       route,
       route.from,
       route.to,
-      () => { throw new Error('unexpected fallback'); },
+      () => {
+        throw new Error('unexpected fallback');
+      },
       { radius, down },
     );
     expect(path).toContain('C');
@@ -87,16 +88,19 @@ test('forward ELK paths never overshoot their handles after endpoint offsets, in
   for (const down of [false, true]) {
     const at = (u: number, v: number) => (down ? p(v, u) : p(u, v));
     for (const routing of ['ORTHOGONAL', 'POLYLINE', 'SPLINES'] as const) {
-      const points = routing === 'SPLINES'
-        ? [at(0, 0), at(310, 0), at(310, 100), at(300, 100)]
-        : [at(0, 0), at(-10, 0), at(310, 0), at(310, 100), at(300, 100)];
+      const points =
+        routing === 'SPLINES'
+          ? [at(0, 0), at(310, 0), at(310, 100), at(300, 100)]
+          : [at(0, 0), at(-10, 0), at(310, 0), at(310, 100), at(300, 100)];
       const original = points.map((point) => ({ ...point }));
       const route = { points, routing, label: at(150, 50), from: p(0, 0), to: p(300, 0) };
       const [path, lx, ly, end] = edgePath(
         route,
         route.from,
         route.to,
-        () => { throw new Error('unexpected fallback'); },
+        () => {
+          throw new Error('unexpected fallback');
+        },
         { radius: turnFor(6, 10), down },
       );
       // All endpoints and controls advance along the flow; their Béziers therefore cannot double back.
@@ -107,6 +111,13 @@ test('forward ELK paths never overshoot their handles after endpoint offsets, in
       expect(end).toEqual({ at: at(300, 100), dir: at(1, 0) });
       expect(route.points).toEqual(original);
       expect([lx, ly]).toEqual(down ? [50, 150] : [150, 50]);
+      if (routing === 'ORTHOGONAL') {
+        const arc = [...path.matchAll(/Q([-\d.,]+) ([-\d.,]+)/g)].at(-1)!;
+        const corner = arc[1].split(',').map(Number);
+        const exit = arc[2].split(',').map(Number);
+        // A quadratic right-angle bend's minimum curvature radius must exceed the outer lane's offset.
+        expect(Math.hypot(exit[0] - corner[0], exit[1] - corner[1]) / Math.SQRT2).toBeGreaterThan(25);
+      }
     }
   }
 });
@@ -114,7 +125,10 @@ test('forward ELK paths never overshoot their handles after endpoint offsets, in
 test('drag fallback keeps wide small-step belts eased and arrows pointing into either floor direction', () => {
   for (const down of [false, true]) {
     const e = {
-      sourceX: 0, sourceY: 0, targetX: down ? 8 : 400, targetY: down ? 400 : 8,
+      sourceX: 0,
+      sourceY: 0,
+      targetX: down ? 8 : 400,
+      targetY: down ? 400 : 8,
       sourcePosition: down ? Position.Bottom : Position.Right,
       targetPosition: down ? Position.Top : Position.Left,
     };
@@ -134,9 +148,21 @@ test('drag fallback keeps wide small-step belts eased and arrows pointing into e
 test('intentional back routes keep their detour and arrival direction', () => {
   const route = {
     points: [p(300, 0), p(350, 0), p(350, 100), p(-50, 100), p(-50, 0), p(0, 0)],
-    routing: 'ORTHOGONAL' as const, label: p(150, 100), from: p(300, 0), to: p(0, 0), loop: p(-30, 0),
+    routing: 'ORTHOGONAL' as const,
+    label: p(150, 100),
+    from: p(300, 0),
+    to: p(0, 0),
+    loop: p(-30, 0),
   };
-  const [path, , , end] = edgePath(route, route.from, route.to, () => { throw new Error('unexpected fallback'); }, { radius: turnFor(6, 10), down: false });
+  const [path, , , end] = edgePath(
+    route,
+    route.from,
+    route.to,
+    () => {
+      throw new Error('unexpected fallback');
+    },
+    { radius: turnFor(6, 10), down: false },
+  );
   expect(path).toContain('350,100');
   expect(path).toContain('-50,0');
   expect(end).toEqual({ at: p(0, 0), dir: p(1, 0) });

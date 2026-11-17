@@ -8,7 +8,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "types": ["@cloudflare/workers-types/2023-07-01"]
+    "types": ["@cloudflare/workers-types"]
   },
   "include": ["./**/*.ts", "../src/lib/feedback-schema.ts"]
 }

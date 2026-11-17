@@ -24,6 +24,8 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 
 ### Changed
 
+- **Dependencies:** updated all JavaScript packages and both game-file extractors' CUE4Parse packages to their latest
+  stable releases, including React, ELK, HiGHS, Vite, the PWA plugin, Cloudflare tooling and the browser test tools.
 - **Machines run full:** a line runs every machine at 100% (or the clock you set, if lower) and only a single one at
   what's left over, so 2.45 smelters are 2 × 100% + 1 × 45% rather than 3 × 81.67%. Power goes up a little, since a
   machine's power grows faster than its clock: 5 motors a minute take 186.85 MW instead of 184.96 MW. Settings ›

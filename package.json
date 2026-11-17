@@ -47,7 +47,7 @@
     "@fontsource/inter": "^5.3.0",
     "@fontsource/poppins": "^5.3.0",
     "@fontsource/rajdhani": "^5.3.0",
-    "@xyflow/react": "^12.12.1",
+    "@xyflow/react": "^13.0.1",
     "elkjs": "0.12.1",
     "highs": "^1.15.4",
     "leaflet": "1.9.4",
@@ -56,8 +56,8 @@
     "zustand": "^5.1.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7",
-    "@cloudflare/workers-types": "5.20261114.1",
+    "@biomejs/biome": "2.6.8",
+    "@cloudflare/workers-types": "5.20261117.1",
     "@etothepii/satisfactory-file-parser": "4.1.2",
     "@happy-dom/global-registrator": "21.0.4",
     "@testing-library/react": "16.3.3",
@@ -67,7 +67,7 @@
     "@types/react-dom": "^19.3.0",
     "@vite-pwa/assets-generator": "^2.0.0",
     "@vitejs/plugin-react": "^6.3.0",
-    "axe-core": "4.14.0",
+    "axe-core": "4.14.1",
     "happy-dom": "21.0.4",
     "playwright-core": "1.65.1",
     "sharp": "^0.35.5",
@@ -75,6 +75,6 @@
     "vite": "^8.3.8",
     "vite-plugin-pwa": "^2.0.0",
     "workbox-window": "^7.4.1",
-    "wrangler": "4.162.0"
+    "wrangler": "4.163.0"
   }
 }

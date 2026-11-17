@@ -26,6 +26,9 @@ All notable changes to FICSIT Planner. Dates are when the version was finished.
 
 - **Dependencies:** updated all JavaScript packages and both game-file extractors' CUE4Parse packages to their latest
   stable releases, including React, ELK, HiGHS, Vite, the PWA plugin, Cloudflare tooling and the browser test tools.
+- **Dependency refresh:** upgraded React Flow to 13.0.1, migrated both floors to its changesets and split stores, and
+  kept existing grid snapping, connection cancellation and belt stacking. Updated Biome, Cloudflare types, Wrangler,
+  axe-core and compatible transitive packages; CI now uses Bun 1.4.4 and the current checkout and artifact actions.
 - **Machines run full:** a line runs every machine at 100% (or the clock you set, if lower) and only a single one at
   what's left over, so 2.45 smelters are 2 × 100% + 1 × 45% rather than 3 × 81.67%. Power goes up a little, since a
   machine's power grows faster than its clock: 5 motors a minute take 186.85 MW instead of 184.96 MW. Settings ›

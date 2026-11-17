@@ -5,7 +5,7 @@ import {
   getSmoothStepPath,
   getStraightPath,
   useReactFlow,
-  useStore as useFlowStore,
+  useViewportStore,
 } from '@xyflow/react';
 import { createContext, type MouseEvent as ReactMouse, type PointerEvent as ReactPointer, useContext, useState } from 'react';
 import { data } from '../../lib/data';
@@ -49,10 +49,10 @@ const stillSelector = (s: { transform: [number, number, number] }) => s.transfor
 /** A belt or pipe the player laid: its Mk, what it carries, and a red badge when it's full or jammed. */
 export function BeltLink({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data: d, selected }: EdgeProps) {
   const { t, name, num } = useT();
-  const far = useFlowStore(farSelector);
-  const still = useFlowStore(stillSelector);
+  const far = useViewportStore(farSelector);
+  const still = useViewportStore(stillSelector);
   // The dots keep a size a finger or a pointer can hit when the floor is zoomed out.
-  const zoom = useFlowStore((s) => s.transform[2]);
+  const zoom = useViewportStore((s) => s.transform[2]);
   const labels = useStore((s) => s.settings.beltLabels);
   const oneColor = useStore((s) => s.settings.beltColors === 'one');
   const { link, item, transport, calc, down } = d as BeltData;

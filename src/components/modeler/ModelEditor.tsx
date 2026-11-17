@@ -1,20 +1,19 @@
 import { skipKey } from '../../lib/unlocks';
 import {
-  applyNodeChanges,
   Background,
   BackgroundVariant,
   type Connection,
   type Edge,
   type FinalConnectionState,
   type Node,
-  type NodeChange,
+  NodeChangeset,
   ReactFlow,
   SelectionMode,
   type Viewport,
   ReactFlowProvider,
   useReactFlow,
-  useStore as useFlowStore,
-  useStoreApi,
+  useConnectionStore,
+  useReactFlowStoreApi,
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -203,8 +202,8 @@ function Canvas({ host, calc, onArrange }: CanvasProps) {
   const addWith = useStore((s) => s.settings.addWith);
   const coarse = useMediaQuery(COARSE);
   const flow = useReactFlow();
-  const flowStore = useStoreApi();
-  const clickStart = useFlowStore(clickStartSelector);
+  const flowStore = useReactFlowStoreApi();
+  const clickStart = useConnectionStore(clickStartSelector);
   const { model } = host;
   const dir = dirOf(model);
   // What the belt being laid by taps carries, when its end says.
@@ -313,21 +312,21 @@ function Canvas({ host, calc, onArrange }: CanvasProps) {
   // On a touch screen a card moves only once it's picked, so a finger on any other card pans the floor.
   const shown = useMemo(() => (coarse ? nodes.map((n) => ({ ...n, draggable: !!n.selected })) : nodes), [nodes, coarse]);
 
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
+  const onNodesChange = useCallback((changes: NodeChangeset<Node>) => {
     // Removing goes through the model (Delete key), so it can be undone.
     setNodes((cur) => {
       // The floor snaps to half a square for the sake of areas; cards stay on whole squares.
       const areas = new Set(cur.filter((n) => n.type === 'area').map((n) => n.id));
-      return applyNodeChanges(
-        changes
-          .filter((c) => c.type !== 'remove')
-          .map((c) =>
-            c.type === 'position' && c.position && !areas.has(c.id)
-              ? { ...c, position: { x: snap(c.position.x), y: snap(c.position.y) } }
-              : c,
-          ),
-        cur,
-      );
+      const snapped = new NodeChangeset<Node>();
+      for (const c of changes) {
+        if (c.type === 'remove') continue;
+        snapped.add(
+          c.type === 'position' && c.position && !areas.has(c.id)
+            ? { ...c, position: { x: snap(c.position.x), y: snap(c.position.y) } }
+            : c,
+        );
+      }
+      return snapped.applyTo(cur);
     });
   }, []);
 
@@ -431,7 +430,8 @@ function Canvas({ host, calc, onArrange }: CanvasProps) {
       } else if (e.key === 'Escape') {
         setPicked(new Set());
         setNodes((cur) => cur.map((n) => (n.selected ? { ...n, selected: false } : n)));
-        flowStore.setState({ connectionClickStartHandle: null, nodesSelectionActive: false });
+        flowStore.connectionStore.setState({ connectionClickStartHandle: null });
+        flowStore.optionsStore.setState({ nodesSelectionActive: false });
         set({ inspect: undefined });
       }
     };
@@ -792,6 +792,7 @@ function Canvas({ host, calc, onArrange }: CanvasProps) {
                     onlyRenderVisibleElements={shown.length > 60}
                     nodeTypes={nodeTypes}
                     edgeTypes={edgeTypes}
+                    elevateEdgesOnSelect={false}
                     onNodesChange={onNodesChange}
                     onNodeDragStart={(_, n) => {
                       carrying.current = n.type === 'area' ? { id: n.id, from: n.position, inside: insidePlaces(model, n.id) } : undefined;
@@ -909,20 +910,16 @@ function Canvas({ host, calc, onArrange }: CanvasProps) {
                     onPaneMouseLeave={() => {
                       pointer.current = undefined;
                     }}
-                    onPaneClick={(e) => {
-                      // Half way through laying a belt by taps: the floor tapped is where the next card goes.
-                      const start = flowStore.getState().connectionClickStartHandle;
-                      if (start) {
-                        flowStore.setState({ connectionClickStartHandle: null });
-                        const port = Number(start.id?.slice(1));
-                        if (Number.isInteger(port)) {
-                          choose(
-                            { x: e.clientX, y: e.clientY },
-                            wantAt(model, tier, start.nodeId, start.type === 'source' ? 'out' : 'in', port),
-                          );
-                          return;
-                        }
-                      }
+                    onClickConnectEnd={(e) => {
+                      // React Flow clears the pending handle before onPaneClick runs.
+                      if (!(e.target as Element | null)?.classList.contains('react-flow__pane')) return;
+                      const start = flowStore.connectionStore.getState().connectionClickStartHandle;
+                      if (!start) return;
+                      const port = Number(start.id?.slice(1));
+                      if (Number.isInteger(port))
+                        choose(pointOf(e), wantAt(model, tier, start.nodeId, start.type === 'source' ? 'out' : 'in', port));
+                    }}
+                    onPaneClick={() => {
                       clearTimeout(opening.current);
                       setPicked(new Set());
                       set({ inspect: undefined });
@@ -945,7 +942,7 @@ function Canvas({ host, calc, onArrange }: CanvasProps) {
                           <button
                             type="button"
                             className="text-button"
-                            onClick={() => flowStore.setState({ connectionClickStartHandle: null })}
+                            onClick={() => flowStore.connectionStore.setState({ connectionClickStartHandle: null })}
                           >
                             {t('cancel')}
                           </button>

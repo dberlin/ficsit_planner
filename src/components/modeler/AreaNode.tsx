@@ -1,4 +1,4 @@
-import { type Node, NodeResizer, type NodeProps, useStore as useFlowStore, ViewportPortal } from '@xyflow/react';
+import { type Node, NodeResizer, type NodeProps, useViewportStore, ViewportPortal } from '@xyflow/react';
 import { snapHalf } from '../../lib/model/layout';
 import { useT } from '../../lib/i18n';
 import { AREA_COLOR } from '../../lib/model/color';
@@ -53,7 +53,7 @@ export function AreaNode({ data, positionAbsoluteX, positionAbsoluteY, width, he
   const n = (data as AreaData).node;
   const labels = useStore((s) => s.settings.areaLabels);
   const picked = useStore((s) => s.inspect === n.id);
-  const zoom = useFlowStore(zoomOf);
+  const zoom = useViewportStore(zoomOf);
   const { t } = useT();
   const edit = useContext(EditCard);
   // Zoomed far out with Always, the name leaves the strip for the middle of the area: grown in the strip it covered the

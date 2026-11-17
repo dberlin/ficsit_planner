@@ -9,7 +9,8 @@ import {
   ReactFlowProvider,
   useInternalNode,
   useReactFlow,
-  useStore as useFlowStore,
+  useEdgesStore,
+  useViewportStore,
   type Edge,
   type EdgeProps,
   type Node,
@@ -533,8 +534,8 @@ function PowerNode({ id, data: d }: NodeProps) {
 function PowerEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data: d }: EdgeProps) {
   const { num } = useT();
   const focused = useEdgeFocus(id, source, target, true);
-  const zoom = useFlowStore(zoomSelector);
-  const still = useFlowStore(stillSelector);
+  const zoom = useViewportStore(zoomSelector);
+  const still = useViewportStore(stillSelector);
   const labels = useStore((s) => s.settings.beltLabels);
   const routing = useStore((s) => ROUTING[s.settings.autoBelts]);
   const { mw, route } = d as PowerEdgeData;
@@ -585,8 +586,8 @@ function nodeName(node: unknown, name: (x: { name: string }) => string): string 
 function FlowEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data: d }: EdgeProps) {
   const { name, num, t } = useT();
   const focused = useEdgeFocus(id, source, target);
-  const zoom = useFlowStore(zoomSelector);
-  const still = useFlowStore(stillSelector);
+  const zoom = useViewportStore(zoomSelector);
+  const still = useViewportStore(stillSelector);
   const labels = useStore((s) => s.settings.beltLabels);
   const routing = useStore((s) => ROUTING[s.settings.autoBelts]);
   const oneColor = useStore((s) => s.settings.beltColors === 'one');
@@ -694,7 +695,7 @@ function LogisticNode({ id, data: d }: NodeProps) {
   const near = useNear(id);
   const dir = useContext(Flow);
   // Which ends have a belt on them; the others stay dim.
-  const wired = useFlowStore((s) =>
+  const wired = useEdgesStore((s) =>
     s.edges.flatMap((e) => (e.source === id ? [e.sourceHandle] : e.target === id ? [e.targetHandle] : [])).join(),
   );
   const along = (at: number) => (dir === 'TB' ? { left: `${at * 100}%` } : { top: `${at * 100}%` });
@@ -1032,6 +1033,7 @@ function Canvas({
             snapGrid={[GRID, GRID]}
             onlyRenderVisibleElements={nodes.length > BIG_GRAPH}
             edgesFocusable={false}
+            elevateEdgesOnSelect={false}
             minZoom={minZoom}
             maxZoom={2}
             proOptions={{ hideAttribution: true }}

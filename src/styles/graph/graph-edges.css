@@ -181,6 +181,6 @@
   opacity: 0.2;
 }
 
-.react-flow__pane {
+.react-flow__pane::before {
   cursor: grab;
 }
